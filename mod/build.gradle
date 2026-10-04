@@ -30,7 +30,11 @@ loom {
 			// window. World auto-load/creation, mute and focus behaviour are handled by the mod itself
 			// (see mod/DEV.md).
 			def player = (System.getenv("AGENTCRAFT_PLAYER") ?: System.getProperty("user.name") ?: "Player").replaceAll(/[^A-Za-z0-9_]/, "").take(16) ?: "Player"
-			programArgs "--username", player, "--width", "1920", "--height", "1080"
+			// window size: tools/launch.ps1 fits it to the screen (AGENTCRAFT_WINDOW_WIDTH/HEIGHT); 1920x1080
+			// otherwise (and with -Dev: screenshot QA expects that framebuffer size)
+			def winW = (System.getenv("AGENTCRAFT_WINDOW_WIDTH") ?: "1920").replaceAll(/[^0-9]/, "") ?: "1920"
+			def winH = (System.getenv("AGENTCRAFT_WINDOW_HEIGHT") ?: "1080").replaceAll(/[^0-9]/, "") ?: "1080"
+			programArgs "--username", player, "--width", winW, "--height", winH
 			// FFM (java.lang.foreign) is used by the DevBridge for a read-only OS focus check.
 			vmArgs "-Xmx4G", "--enable-native-access=ALL-UNNAMED"
 			runDir "run"

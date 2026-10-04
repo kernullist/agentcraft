@@ -32,6 +32,8 @@ param(
     [switch]$Reset,
     [switch]$NoBrowser,
     [int]$LoginTimeoutSec = 900,
+    # game window: WIDTHxHEIGHT, or auto (fits the screen; see tools\launch.ps1 -Window)
+    [string]$Window,
     [string[]]$ForemanArgs = @()
 )
 
@@ -331,6 +333,10 @@ else
     if ($Dev)
     {
         $gameArgs += '-Dev'
+    }
+    if ($Window)
+    {
+        $gameArgs += @('-Window', $Window)
     }
     $rc = Invoke-Launch $gameArgs @()
     if ($rc -ne 0)

@@ -51,6 +51,8 @@ param(
     [int]$Port = 0,
     [int]$DevPort = 0,
     [ValidateSet('ask', 'stop', 'use', 'cancel')][string]$IfRunning = 'ask',
+    # game window: WIDTHxHEIGHT, or auto (fits the screen; see tools\launch.ps1 -Window)
+    [string]$Window,
     [string[]]$ForemanArgs = @()
 )
 
@@ -540,6 +542,10 @@ if ($NoGame)
 else
 {
     $gameArgs = Get-CommonLaunchArgs
+    if ($Window)
+    {
+        $gameArgs += @('-Window', $Window)
+    }
     $rc = Invoke-Launch $gameArgs @()
     if ($rc -ne 0)
     {

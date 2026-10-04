@@ -60,6 +60,7 @@ If the game of this checkout is already running it is reused (one client per che
 | `-Showcase [busy\|late]` | | hold a static scripted state (QA screenshots); always a fresh (`--reset`) profile |
 | `-Home <dir>` | `~/.agentcraft` (`AGENTCRAFT_HOME`); with `-Dev`: `<main checkout>\.agentcraft-home` | **QA/tests must pass the project home** |
 | `-Port N` / `-DevPort N` | 7878 / 7879 (`AGENTCRAFT_PORT` / `AGENTCRAFT_DEV_PORT`) | 3000/5173/8080 are refused |
+| `-Window WxH\|auto` | `auto` | game window size; auto = 1920x1080 when it fits the screen's working area, else the largest 16:9 that fits (`-Dev`: always 1920x1080 for screenshot QA) |
 | `-Dev` | | unattended runs: muted, never steals focus, no toasts, Gradle daemon exits after 30 idle min |
 | `-Reset` | | wipe the profile before starting (new Foreman only) |
 | `-Speed x`, `-Autostart`, `-Goal "..."` | | sim speed / start the scripted goal / submit a goal at start |

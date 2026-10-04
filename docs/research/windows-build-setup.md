@@ -39,6 +39,11 @@ clean checkout(main @ 0be815d) 상태에서 mod(Fabric, MC 26.3), foreman(Node/T
    수정: `ConvertTo-UtcTime`(DateTime이면 Kind 보존, 문자열은 InvariantCulture+RoundtripKind) + 시작시각 인자를 [object]로(Test-SameProc/Wait-ProcExit/Stop-OwnTree, stop.ps1:129).
    PS7·5.1 양쪽에서 같은 pid true / 다른 시각 false 확인. 지워진 codex 실행 기록은 bg 상태 파일 + 실제 프로세스 시작시각으로 복원
    (`artifacts/run/foreman-codex-restored.json`). run-deepseek.ps1은 stop 후 pid가 실제로 사라졌는지 확인하도록 보강.
+9. 2026-10-04 "창 모드가 안 됨": 설정은 `fullscreen:false`였지만 게임 창이 `build.gradle`에서 1920x1080 고정.
+   이 PC는 1920x1080 모니터(작업 영역 1920x1032, 배율 100%) → 창+제목줄+테두리가 화면보다 커서 전체 화면처럼 보이고 제목줄을 잡을 수 없음.
+   수정: build.gradle이 `AGENTCRAFT_WINDOW_WIDTH/HEIGHT`를 읽고, `launch.ps1 -Window WxH|auto`(기본 auto)가 주 모니터 작업 영역에 맞는 최대 16:9 크기를 계산
+   (여유: 가로 16, 세로 40). `-Dev`는 스크린샷 QA가 1920x1080 프레임버퍼를 전제하므로 1920x1080 유지. run-codex/run-deepseek에 `-Window` 전달.
+   실측: auto → 1760x990, 실제 게임 창 1760x990 확인(dev.state). 한계: 배율 100%에서만 확인 — 배율이 다른 모니터에서 SDL3 창 크기 단위(논리/물리) 미검증.
 
 ## 환경
 - OS: Windows 11 Pro 10.0.26200, 비관리자 셸

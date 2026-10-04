@@ -31,6 +31,9 @@ param(
     [switch]$Showcase,
     [Parameter(Position = 0)][ValidateSet('busy', 'late')][string]$ShowcaseAt,
     [switch]$Dev,
+    # game window: WIDTHxHEIGHT, or auto (default): 1920x1080 when it fits the screen's working
+    # area (always with -Dev, for screenshot QA), else the largest 16:9 window that fits
+    [string]$Window = 'auto',
     [int]$Port,
     [int]$DevPort,
     [Alias('Home')][string]$AgentHome,
@@ -64,6 +67,28 @@ $summary = [ordered]@{ ok = $false; checkout = $Root; dev = [bool]$Dev; foreman 
 
 function Save-Summary {
     if ($SummaryJson) { Write-JsonFile $SummaryJson $summary }
+}
+
+# The game window size. A 1920x1080 window does not fit a 1920x1080 screen (taskbar, title bar,
+# borders): it then covers the whole screen like full screen, with its title bar out of reach.
+function Resolve-WindowSize([string]$Spec) {
+    if ($Spec -match '^\s*(\d{3,5})\s*[xX]\s*(\d{3,5})\s*$') { return @([int]$Matches[1], [int]$Matches[2]) }
+    if ($Spec -and $Spec -ne 'auto') { Fail "-Window must be WIDTHxHEIGHT (e.g. 1600x900) or auto (got '$Spec')" }
+    if ($Dev) { return @(1920, 1080) }
+    $w = 1920; $h = 1080
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $maxW = $wa.Width - 16; $maxH = $wa.Height - 40   # borders + title bar
+        if ($maxW -lt $w -or $maxH -lt $h) {
+            $scale = [Math]::Min($maxW / 1920.0, $maxH / 1080.0)
+            $w = [int]([Math]::Floor(1920 * $scale / 16) * 16)
+            $h = [int]($w * 9 / 16)
+        }
+    } catch {
+        # no screen information (no desktop session): keep the default
+    }
+    return @($w, $h)
 }
 
 function Fail([string]$Message, [string[]]$Tail) {
@@ -330,8 +355,11 @@ if ($liveGame) {
     if ($Dev) { $gargs += '-Dorg.gradle.daemon.idletimeout=1800000' }   # unattended: daemon exits after 30 idle minutes
     $gameLog = Join-Path $L.Logs 'game.log'
     $gameErr = Join-Path $L.Logs 'game.err.log'
+    $win = Resolve-WindowSize $Window
     # passed to gradlew; the Gradle daemon hands the client's environment to the game JVM
     $gameEnv = @{
+        AGENTCRAFT_WINDOW_WIDTH  = [string]$win[0]
+        AGENTCRAFT_WINDOW_HEIGHT = [string]$win[1]
         GRADLE_USER_HOME    = $GradleHome
         AGENTCRAFT_PORT     = [string]$fmPort
         AGENTCRAFT_DEV_PORT = [string]$DevPort
