@@ -225,6 +225,8 @@ Anthropic-compatible endpoint, or ChatGPT. Each one is tested when you save it, 
 will be sent, and can run Marlow, the workers or both (for example Marlow on Claude and the workers
 on DeepSeek), from the next turn on. API keys go to your OS credential store and are never shown
 again. The terminal UI has the same `/connect` command. Details: [docs/adr/0002](docs/adr/0002-runtimes-and-connections.md).
+On Windows, `.un-deepseek.ps1` does it in one go: prepares the PC, starts the Foreman, asks for the
+DeepSeek key (hidden input; saved for next time), assigns it to the team and starts the game.
 
 **Your name.** The agents call you by your OS user name. Change it with
 `-ForemanArgs '--user-name','Sam'`, `AGENTCRAFT_USER_NAME`, or `{"userName": "Sam"}` in

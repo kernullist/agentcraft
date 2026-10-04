@@ -1,6 +1,8 @@
 # CHANGELOG
 
 ## 2026-10-04
+- tools: `run-deepseek.ps1` 원샷 실행(키 숨김 입력→stdin→OS 자격증명 저장소, 재실행 시 재사용), `foremancli connections` / `connection-setup`.
+  `run-codex.ps1`의 Windows PowerShell 5.1 node 버전 확인 버그 수정.
 - foreman/mod: **다중 LLM 연결(Connections)**. 런타임(Claude Agent SDK / codex app-server)과 연결(프로바이더+엔드포인트+키+모델)을 분리,
   리드/워커별 배정, 실행 중 추가·테스트·전환(게임 콘솔 `/connect` 화면, TUI `/connect`). 신규 프로바이더: DeepSeek(Anthropic 호환 엔드포인트),
   Anthropic API, Claude 로그인, 클라우드, Anthropic 호환 임의 엔드포인트, ChatGPT. 키는 OS 자격증명 저장소, 클라이언트엔 마스킹만. 결정: docs/adr/0002.

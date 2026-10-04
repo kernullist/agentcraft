@@ -149,7 +149,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue))
 {
     Stop-WithError 'node is not installed (Node 22+ required: https://nodejs.org)'
 }
-$nodeMajor = [int]((node -p 'process.versions.node.split(".")[0]') 2>$null)
+$nodeMajor = [int](node -p "process.versions.node.split('.')[0]")
 if ($nodeMajor -lt 22)
 {
     Stop-WithError "Node 22+ required (found $(node -v))"

@@ -37,6 +37,8 @@ function emptyState() {
     goal: null,
     feed: [],
     logs: new Map(),
+    /** claude/codex Foremen: connections by id (keys masked) */
+    connections: new Map(),
   };
 }
 
@@ -139,8 +141,11 @@ export class ForemanClient {
         s.goal = m.goal ?? null;
         s.feed = [...(m.feed ?? [])];
         s.logs = new Map((m.logs ?? []).map((l) => [l.agentId, [...l.entries]]));
+        s.connections = new Map((m.connections ?? []).map((c) => [c.id, c]));
         break;
       }
+      case 'connection.upsert': if (m.connection) s.connections.set(m.connection.id, m.connection); break;
+      case 'connection.remove': s.connections.delete(m.connectionId); break;
       case 'agent.upsert': if (m.agent) s.agents.set(m.agent.id, m.agent); break;
       case 'task.upsert': if (m.task) s.tasks.set(m.task.id, m.task); break;
       case 'decision.upsert': if (m.decision) s.decisions.set(m.decision.id, m.decision); break;

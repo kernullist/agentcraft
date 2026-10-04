@@ -19,6 +19,12 @@ clean checkout(main @ 0be815d) 상태에서 mod(Fabric, MC 26.3), foreman(Node/T
 5. 2026-10-04 추가: 원샷 스크립트 `run-codex.ps1` (처음엔 미추적, 사용자 요청으로 `dev-env.ps1`과 함께 커밋). 도구 확인 → JDK 25(없으면 Temurin 포터블 설치, SHA-256 검증)
    → 위 환경변수 → 대상 리포(기본 `sandbox/codex-demo` 자동 생성) → Foreman만 기동 → 로그에서 장치 코드 표시/클립보드/브라우저 → 로그인 완료 후 게임 기동.
    주의: launch.ps1을 `-File`로 부르면 `-ForemanArgs` 배열이 쉼표로 합쳐져 Foreman이 거부함 → `-Command` + 인자별 작은따옴표 인용으로 호출.
+6. 2026-10-04 추가: `run-deepseek.ps1` (프로필 `deepseek`, claude 런타임). 키는 `Read-Host -AsSecureString` → `foremancli connection-setup --key-stdin`의
+   stdin으로만 전달(명령줄 인자 금지: 다른 프로세스가 볼 수 있음). 저장된 연결이 동작하면 재입력 없이 재사용, 거절되면 최대 3회 재입력.
+   첫 등록 시 "코드가 DeepSeek으로 전송" 확인(-Yes로 생략). `-ApiKeyEnv NAME`이면 env 참조로 저장.
+   실측: 가짜 키(env, stdin 둘 다) → 실제 DeepSeek 401 → 실패 사유 출력, 로그/파일에 키 없음.
+   **함정:** Windows PowerShell 5.1은 네이티브 명령 인자 안의 큰따옴표를 제거함 → `node -p 'process.versions.node.split(".")[0]'`가 SyntaxError.
+   run-codex.ps1에도 있던 버그(PS7에서만 테스트해서 놓침). 바깥 큰따옴표 + 안쪽 작은따옴표로 수정. 스크립트는 PS 5.1과 7 둘 다로 검증할 것.
 
 ## 환경
 - OS: Windows 11 Pro 10.0.26200, 비관리자 셸
