@@ -2,7 +2,7 @@
 
 - 작성일: 2026-10-04
 - 상태: 결론 도출 (미해결 2건)
-- 관련: mod/DEV.md, tools/README.md, foreman/README.md, 로컬 `dev-env.ps1` (git 미추적)
+- 관련: mod/DEV.md, tools/README.md, foreman/README.md, `dev-env.ps1`, `run-codex.ps1` (리포 루트, 2026-10-04부터 커밋)
 
 ## 질문
 clean checkout(main @ 0be815d) 상태에서 mod(Fabric, MC 26.3), foreman(Node/TS), assets 동기화 검사를
@@ -16,7 +16,7 @@ clean checkout(main @ 0be815d) 상태에서 mod(Fabric, MC 26.3), foreman(Node/T
 4. 결과: `gradlew build` 성공 (`mod/build/libs/agentcraft-0.1.0.jar`), `sync.py --check` 최신, `launch.ps1 -DryRun` 통과,
    foreman 테스트 481/482 통과. 남은 1건은 Node 26 호환성 버그 → 2026-10-04 수정 후 485/485.
 
-5. 2026-10-04 추가: 로컬 원샷 스크립트 `run-codex.ps1` (git 미추적, `.git/info/exclude`). 도구 확인 → JDK 25(없으면 Temurin 포터블 설치, SHA-256 검증)
+5. 2026-10-04 추가: 원샷 스크립트 `run-codex.ps1` (처음엔 미추적, 사용자 요청으로 `dev-env.ps1`과 함께 커밋). 도구 확인 → JDK 25(없으면 Temurin 포터블 설치, SHA-256 검증)
    → 위 환경변수 → 대상 리포(기본 `sandbox/codex-demo` 자동 생성) → Foreman만 기동 → 로그에서 장치 코드 표시/클립보드/브라우저 → 로그인 완료 후 게임 기동.
    주의: launch.ps1을 `-File`로 부르면 `-ForemanArgs` 배열이 쉼표로 합쳐져 Foreman이 거부함 → `-Command` + 인자별 작은따옴표 인용으로 호출.
 
