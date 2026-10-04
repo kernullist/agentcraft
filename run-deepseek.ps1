@@ -409,6 +409,12 @@ if ($others.Count -gt 0)
             {
                 Stop-WithError "could not stop profile $($o.profile) (see above)"
             }
+            # trust the process, not the report: a Foreman that is still alive keeps the port
+            $left = Get-Process -Id ([int]$o.pid) -ErrorAction SilentlyContinue
+            if ($left)
+            {
+                Stop-WithError ("Foreman '{0}' (pid {1}) is still running after tools\stop.ps1 (it may not have a launch.ps1 run file). Quit its window or stop pid {1}, then run this again." -f $o.profile, $o.pid)
+            }
         }
     }
     if ($choice -eq 'use')

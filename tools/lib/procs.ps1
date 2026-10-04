@@ -65,13 +65,25 @@ function Get-ProcStart([int]$ProcessId) {
     } catch { return $null }
 }
 
-# True when $ProcessId is alive and was started at $Start (ISO string, +-2 s): not a reused pid.
-function Test-SameProc([int]$ProcessId, [string]$Start) {
+# A recorded start time as UTC. Run files hold ISO strings ("...Z"); PowerShell 7's ConvertFrom-Json
+# turns those into DateTime (Kind Utc). Never round-trip through [string]: that drops the "Z" and the
+# value is then read as local time (9 h off in Korea), so a live process looked stopped.
+function ConvertTo-UtcTime([object]$Value) {
+    if ($null -eq $Value -or "$Value" -eq '') { return $null }
+    if ($Value -is [DateTime]) {
+        if ($Value.Kind -eq [DateTimeKind]::Unspecified) { return [DateTime]::SpecifyKind($Value, [DateTimeKind]::Utc) }
+        return $Value.ToUniversalTime()
+    }
+    return [DateTime]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+}
+
+# True when $ProcessId is alive and was started at $Start (ISO string or DateTime, +-2 s): not a reused pid.
+function Test-SameProc([int]$ProcessId, [object]$Start) {
     if (-not $ProcessId -or -not $Start) { return $false }
     $now = Get-ProcStart $ProcessId
     if (-not $now) { return $false }
-    $a = [DateTime]::Parse($now).ToUniversalTime()
-    $b = [DateTime]::Parse($Start).ToUniversalTime()
+    $a = ConvertTo-UtcTime $now
+    $b = ConvertTo-UtcTime $Start
     return ([Math]::Abs(($a - $b).TotalSeconds) -le 2)
 }
 
@@ -109,7 +121,7 @@ function Get-Descendants([int]$ProcessId) {
     return $arr
 }
 
-function Wait-ProcExit([int]$ProcessId, [string]$Start, [double]$TimeoutSec) {
+function Wait-ProcExit([int]$ProcessId, [object]$Start, [double]$TimeoutSec) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if (-not (Test-SameProc $ProcessId $Start)) { return $true }
@@ -119,7 +131,7 @@ function Wait-ProcExit([int]$ProcessId, [string]$Start, [double]$TimeoutSec) {
 }
 
 # Force-kill a process we started and everything it started. Returns the pids it killed.
-function Stop-OwnTree([int]$ProcessId, [string]$Start) {
+function Stop-OwnTree([int]$ProcessId, [object]$Start) {
     $killed = @()
     if (-not (Test-SameProc $ProcessId $Start)) { return $killed }
     foreach ($d in (Get-Descendants $ProcessId)) {

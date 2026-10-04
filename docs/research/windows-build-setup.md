@@ -32,6 +32,13 @@ clean checkout(main @ 0be815d) 상태에서 mod(Fabric, MC 26.3), foreman(Node/T
    use 경로에서 발견한 결함: `-ApiKeyEnv`의 env 참조는 이미 떠 있는 Foreman 환경엔 없음 → 이 경우 스크립트가 값을 읽어 stdin으로 넘기고 자격증명 저장소에 저장.
    격리 홈·포트 27878에서 stop/use/cancel 세 경로 모두 실측(가짜 키는 실제 DeepSeek 401). 실패한 첫 use 테스트는 테스트 명령의 경합
    (Foreman이 foreman.json을 쓰기 전에 스크립트 실행)이었음 — 스크립트 결함 아님.
+8. 2026-10-04 사용자 실행 실패 2: [S]top 선택 → stop.ps1이 "Foreman 'codex' already stopped"라며 실행 기록을 지웠는데 pid 8616은 살아서 포트 점유.
+   원인(재현 확인): 기존 `tools/lib/procs.ps1`의 `Test-SameProc([string]$Start)`. **PowerShell 7의 ConvertFrom-Json은 ISO 날짜를 DateTime으로 변환**하고,
+   `[string]` 캐스트가 `Z`를 버려 `10/04/2026 07:48:01` → `DateTime.Parse`가 로컬(KST)로 해석 → 9시간 차 → "다른 프로세스"로 오판.
+   PS 5.1은 문자열 그대로라 정상. launch.ps1/stop.ps1은 5.1 기준이었고, run-*.ps1이 자식 스크립트를 현재 셸(PS7)로 실행해 드러남.
+   수정: `ConvertTo-UtcTime`(DateTime이면 Kind 보존, 문자열은 InvariantCulture+RoundtripKind) + 시작시각 인자를 [object]로(Test-SameProc/Wait-ProcExit/Stop-OwnTree, stop.ps1:129).
+   PS7·5.1 양쪽에서 같은 pid true / 다른 시각 false 확인. 지워진 codex 실행 기록은 bg 상태 파일 + 실제 프로세스 시작시각으로 복원
+   (`artifacts/run/foreman-codex-restored.json`). run-deepseek.ps1은 stop 후 pid가 실제로 사라졌는지 확인하도록 보강.
 
 ## 환경
 - OS: Windows 11 Pro 10.0.26200, 비관리자 셸

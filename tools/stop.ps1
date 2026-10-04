@@ -126,7 +126,7 @@ if ($doGame) {
                 # names this checkout's launch.cfg and started after our wrapper
                 Start-Sleep -Seconds 2
                 $late = Find-GameJvm $L
-                if ($late -and $late.CreationDate -and $rootStart -and ($late.CreationDate.ToUniversalTime() -ge [DateTime]::Parse($rootStart).ToUniversalTime().AddSeconds(-2))) {
+                if ($late -and $late.CreationDate -and $rootStart -and ($late.CreationDate.ToUniversalTime() -ge (ConvertTo-UtcTime $rootStart).AddSeconds(-2))) {
                     $k = Stop-OwnTree ([int]$late.ProcessId) (Get-ProcStart ([int]$late.ProcessId))
                     Write-Warn2 "game JVM pid $($late.ProcessId) appeared after gradlew was stopped: force-killed pid(s) $($k -join ', ')"
                 }
