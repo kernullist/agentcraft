@@ -32,6 +32,8 @@ export interface SessionRecord {
   updatedAt: number;
   /** why the last turn ended (for resume decisions) */
   lastResult?: string;
+  /** the connection the session ran on (it only resumes there); absent: the command-line connection */
+  connectionId?: string;
 }
 
 export interface WorktreeMeta {

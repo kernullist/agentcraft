@@ -123,6 +123,11 @@ function alive(child: ChildProcess | undefined): child is ChildProcess {
 }
 
 export const TURN_TIMEOUT_MS = 45 * 60_000;
+
+/** First words of a job whose session ran on another connection (see runJob). */
+export const HANDOVER_PROMPT =
+  'You are continuing this job in a new session: the model connection changed, so your earlier conversation is not available. ' +
+  'Before anything else, re-read the current state: the task board (list_tasks), the shared plan (read_memory), and for a task your worktree (git status, git diff). Then continue the job below.';
 export const LEAD = 'marlow';
 
 /**
@@ -176,6 +181,8 @@ export abstract class TeamBackend implements Backend {
   private waitingUser = new Set<string>();
   protected hooks: ToolHooks;
   private lastCost = new Map<string, number>();
+  /** session key -> connection tag of the turn running it (written with the session) */
+  private sessionTags = new Map<string, string | undefined>();
   private turnPromises = new Set<Promise<void>>();
   /** tasks whose CI + review hand-off is in progress */
   private reviewing = new Set<string>();
@@ -212,6 +219,34 @@ export abstract class TeamBackend implements Backend {
   protected abstract modelFor(role: Role): string;
   /** Banner text for an authentication failure seen in a turn (`thrown`: from an exception). */
   protected abstract authFailureMessage(detail: string, thrown: boolean): string;
+
+  /**
+   * Why a role cannot run turns now (undefined: it can). Default: the backend-wide auth flag.
+   * A backend with one connection per role overrides this, so a failed worker connection does not
+   * stop the lead (and the other way round).
+   */
+  protected unavailable(_role: Role): string | undefined {
+    return this.authFailed ? (this.fm.status.message ?? 'auth failed') : undefined;
+  }
+
+  /** A turn of `role` hit an authentication failure. */
+  protected onAuthFailure(_role: Role, detail: string, thrown: boolean): void {
+    this.markAuthFailed(this.authFailureMessage(detail, thrown));
+  }
+
+  /** Tag stored with a session (which connection it belongs to); undefined = untagged. */
+  protected sessionTag(_role: Role): string | undefined {
+    return undefined;
+  }
+
+  /** Can a saved session be resumed by `role` now? A session only resumes on its own connection. */
+  protected sessionUsable(session: { connectionId?: string }, role: Role): boolean {
+    return (session.connectionId ?? undefined) === this.sessionTag(role);
+  }
+
+  protected roleOf(agentId: string): Role {
+    return agentId === LEAD ? 'lead' : 'worker';
+  }
 
   /** this backend's persisted state (store.data.backend[name]) */
   private get st(): TeamState {
@@ -462,9 +497,10 @@ export abstract class TeamBackend implements Backend {
   // ---- goals & scheduling -------------------------------------------------------------------
 
   async submitGoal(goal: Goal): Promise<void> {
-    if (this.authFailed) {
+    const why = this.unavailable('lead');
+    if (why) {
       this.fm.setGoal(goal.id, { status: 'failed' });
-      throw new ClientError(`${this.label} is not available: ${this.fm.status.message ?? 'auth failed'}`);
+      throw new ClientError(`${this.label} is not available: ${why}`);
     }
     const repo = this.fm.repos.require(goal.repoId!);
     if (this.isStopped(LEAD)) {
@@ -508,8 +544,10 @@ export abstract class TeamBackend implements Backend {
   }
 
   private async schedule(): Promise<void> {
-    if (this.authFailed || this.stopping) return;
-    for (const goal of this.fm.goals().filter((g) => g.status === 'active')) {
+    if (this.stopping) return;
+    // no worker can run: leave the board as it is (queued lead jobs are still pumped below)
+    const workersBlocked = this.unavailable('worker') !== undefined;
+    for (const goal of workersBlocked ? [] : this.fm.goals().filter((g) => g.status === 'active')) {
       for (const t of this.fm.tasks.ready(goal.id)) {
         if (this.workersRunning() >= this.cfg.maxConcurrent) return;
         if (this.handoffs.has(t.id)) continue; // the previous worker's turn is still winding down
@@ -574,7 +612,7 @@ export abstract class TeamBackend implements Backend {
   }
 
   private pump(agentId: string): void {
-    if (this.stopping || this.authFailed) return;
+    if (this.stopping || this.unavailable(this.roleOf(agentId))) return;
     if (this.running.has(agentId)) return;
     const a = this.fm.agent(agentId);
     if (!a || a.paused || !a.active || this.isStopped(agentId)) return;
@@ -678,7 +716,12 @@ export abstract class TeamBackend implements Backend {
       if (previous?.reaping) await Promise.race([previous.reaping, sleep(10_000)]);
       const { cwd, role } = this.cwdFor(job);
       const session = this.fm.store.data.sessions[job.sessionKey];
-      const resume = !job.fresh && session?.sessionId ? session.sessionId : undefined;
+      const usable = !!session?.sessionId && this.sessionUsable(session, role);
+      const resume = !job.fresh && usable ? session!.sessionId : undefined;
+      // the job continues a session that ran on another connection (the user switched it): a new
+      // session that first re-reads the state instead of a resume the new endpoint cannot read
+      const handover = !job.fresh && !!session?.sessionId && !usable;
+      this.sessionTags.set(job.sessionKey, this.sessionTag(role));
       this.st.inflight[agentId] = { kind: job.kind, sessionKey: job.sessionKey, startedAt: Date.now(), ...(job.taskId ? { taskId: job.taskId } : {}), ...(job.goalId ? { goalId: job.goalId } : {}) };
       this.fm.store.markDirty();
 
@@ -695,21 +738,23 @@ export abstract class TeamBackend implements Backend {
       timer.unref?.();
       // messages that arrived while the agent was not in a turn ride along with this prompt
       const unread = this.fm.bus.inbox(agentId, { markRead: true });
-      const prompt = unread.length ? `${job.prompt}\n\n[New messages]\n${formatInbox(unread, (id) => this.fm.nameOf(id))}` : job.prompt;
+      const body = handover ? `${HANDOVER_PROMPT}\n\n${job.prompt}` : job.prompt;
+      if (handover) this.fm.agentLog(agentId, 'text', 'Connection changed: starting a new session from the current state');
+      const prompt = unread.length ? `${body}\n\n[New messages]\n${formatInbox(unread, (id) => this.fm.nameOf(id))}` : body;
       try {
         stats = await this.runTurn({ job, agentId, role, cwd, model, systemPrompt, prompt, ...(resume ? { resume } : {}), turn, entry });
       } finally {
         clearTimeout(timer);
       }
       if (stats.sessionId) this.recordSession(job.sessionKey, stats.sessionId, model, stats);
-      if (stats.authFailed) this.markAuthFailed(this.authFailureMessage(stats.authFailed, false));
+      if (stats.authFailed) this.onAuthFailure(role, stats.authFailed, false);
     } catch (e) {
       const aborted = abort.signal.aborted;
       if (!aborted) {
         const msg = (e as Error).message ?? String(e);
         this.fm.log.error(`${agentId} ${job.kind} failed: ${msg}`);
         this.fm.agentLog(agentId, 'error', `session error: ${truncate(msg, 400)}`);
-        if (/auth|login|credential|401/i.test(msg)) this.markAuthFailed(this.authFailureMessage(truncate(msg, 160), true));
+        if (/auth|login|credential|401/i.test(msg)) this.onAuthFailure(this.roleOf(agentId), truncate(msg, 160), true);
         stats = { isError: true, errors: [msg] };
       }
     } finally {
@@ -763,6 +808,11 @@ export abstract class TeamBackend implements Backend {
 
   protected recordSession(key: string, sessionId: string, model: string, stats?: TurnStats): void {
     const s = (this.fm.store.data.sessions[key] ??= { turns: 0, costUsd: 0, updatedAt: Date.now() });
+    if (s.sessionId !== sessionId) {
+      const tag = this.sessionTags.get(key);
+      if (tag) s.connectionId = tag;
+      else delete s.connectionId;
+    }
     s.sessionId = sessionId;
     s.model = model;
     s.updatedAt = Date.now();

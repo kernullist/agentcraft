@@ -87,6 +87,8 @@ export class StreamMapper {
     private agentId: string,
     private cwd: string,
     private role: 'lead' | 'worker',
+    /** sdkCost false: the endpoint is not Claude, so the SDK's USD figure is meaningless (tokens instead) */
+    private opts: { sdkCost?: boolean } = {},
   ) {}
 
   handle(msg: SDKMessage): void {
@@ -155,7 +157,7 @@ export class StreamMapper {
       case 'result': {
         this.stats.subtype = msg.subtype;
         this.stats.isError = msg.is_error || msg.subtype !== 'success';
-        this.stats.costUsd = msg.total_cost_usd;
+        if (this.opts.sdkCost !== false) this.stats.costUsd = msg.total_cost_usd;
         this.stats.numTurns = msg.num_turns;
         this.stats.sessionId ??= msg.session_id;
         if (msg.subtype === 'success') {
@@ -166,7 +168,16 @@ export class StreamMapper {
           const joined = (msg.errors ?? []).join(' ');
           if (AUTH_RE.test(joined)) this.stats.authFailed = firstLine(joined, 200);
         }
-        const cost = typeof msg.total_cost_usd === 'number' ? ` · $${msg.total_cost_usd.toFixed(3)}` : '';
+        const usage = (msg as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+        const tokens = (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+        const cost =
+          this.opts.sdkCost === false
+            ? tokens
+              ? ` · ${tokens.toLocaleString('en-US')} tokens`
+              : ''
+            : typeof msg.total_cost_usd === 'number'
+              ? ` · $${msg.total_cost_usd.toFixed(3)}`
+              : '';
         fm.agentLog(id, this.stats.isError ? 'error' : 'result', `turn ${msg.subtype === 'success' && !msg.is_error ? 'complete' : `ended: ${msg.subtype}`} (${msg.num_turns} steps${cost})`);
         break;
       }

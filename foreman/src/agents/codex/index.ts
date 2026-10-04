@@ -1,6 +1,7 @@
-// Codex backend: OpenAI Codex (the official `codex app-server`) runs the lead and the workers, on
-// the user's ChatGPT subscription signed in with a device code (auth.ts). The orchestration is the
-// shared TeamBackend; this file runs one turn per app-server process:
+// Codex runtime: OpenAI Codex (the official `codex app-server`) runs the lead and/or the workers on
+// a ChatGPT connection, signed in with a device code (auth.ts). The orchestration is the shared
+// TeamBackend, the connection routing agents/team/routed.ts; this file runs one turn per
+// app-server process:
 //
 //   spawn `codex app-server` with the agent's environment (git safety, its own git identity)
 //   initialize (experimental API: dynamic tools)
@@ -20,9 +21,15 @@ import { z } from 'zod';
 import type { CodexConfig } from '../../config.js';
 import { FOREMAN_VERSION } from '../../config.js';
 import type { Foreman } from '../../foreman.js';
+import { ConnectionManager } from '../../connections/manager.js';
+import { modelFor } from '../../connections/providers.js';
+import { MemorySecretStore } from '../../connections/secrets.js';
+import { ConnectionStore } from '../../connections/store.js';
+import { CLI_CONNECTION_ID, type Connection } from '../../connections/types.js';
 import { killTree } from '../../util/proc.js';
 import { truncate } from '../../util/text.js';
-import { TeamBackend, teamEnv, type Role, type TurnSpec, type TurnStats } from '../team/backend.js';
+import { teamEnv, type TurnSpec, type TurnStats } from '../team/backend.js';
+import { RoutedBackend, type AuthReport, type RunnerHost, type RuntimeRunner } from '../team/routed.js';
 import { buildTeamTools, type TeamTool } from '../team/tools.js';
 import { AppServerClient, bundledCodex, resolveCodexCommand, versionFromUserAgent, type CodexCommand } from './appserver.js';
 import { deviceCodeMessage, describeAccount, ensureChatgptLogin } from './auth.js';
@@ -53,33 +60,50 @@ interface CodexTurnResult {
   error: { message: string; codexErrorInfo?: unknown } | null;
 }
 
-export class CodexBackend extends TeamBackend {
-  readonly name = 'codex' as const;
-  protected readonly label = 'Codex';
+/** The connection `--backend codex` (flags, env, config.json) describes. */
+export function cliCodexConnection(cfg: CodexConfig): Connection {
+  const models = { ...(cfg.leadModel ? { lead: cfg.leadModel } : {}), ...(cfg.workerModel ? { worker: cfg.workerModel } : {}) };
+  return {
+    id: CLI_CONNECTION_ID,
+    name: 'Codex',
+    provider: 'chatgpt',
+    ...(Object.keys(models).length ? { models } : {}),
+    codexHome: cfg.codexHome,
+    source: 'cli',
+    createdAt: 0,
+  };
+}
+
+export class CodexRunner implements RuntimeRunner {
+  readonly runtime = 'codex' as const;
   private readonly cmd: CodexCommand;
   private readonly bundled = bundledCodex();
-  private login: AbortController | undefined;
+  private readonly logins = new Map<string, AbortController>();
+  private versionChecked = false;
 
   constructor(
-    fm: Foreman,
-    private codexCfg: CodexConfig,
+    private host: RunnerHost,
+    private cfg: CodexConfig,
     private opts: CodexBackendOptions = {},
   ) {
-    super(fm, codexCfg);
-    this.cmd = resolveCodexCommand(codexCfg.codexBin, process.env, this.bundled ?? null);
+    this.cmd = resolveCodexCommand(cfg.codexBin, process.env, this.bundled ?? null);
   }
 
-  protected modelFor(role: Role): string {
-    return (role === 'lead' ? this.codexCfg.leadModel : this.codexCfg.workerModel) ?? 'codex default';
+  private get fm(): Foreman {
+    return this.host.fm;
   }
 
-  protected authFailureMessage(detail: string, thrown: boolean): string {
-    return `Codex sign-in failed${thrown ? ': ' : ' ('}${detail}${thrown ? '' : ')'}. Restart the Foreman to sign in to ChatGPT again (a new device code is shown).`;
+  authFailureMessage(conn: Connection, detail: string, thrown: boolean): string {
+    return `${conn.name}: Codex sign-in failed${thrown ? ': ' : ' ('}${detail}${thrown ? '' : ')'}. Sign in again from the Connections screen (/connect), or restart the Foreman (a new device code is shown).`;
+  }
+
+  private codexHome(conn: Connection): string {
+    return conn.codexHome ?? this.cfg.codexHome;
   }
 
   /** Environment of an agent's app-server (and every command it runs). */
-  private env(who: { agentId?: string; cwd?: string } = {}): NodeJS.ProcessEnv {
-    return { ...teamEnv(process.env, who), CODEX_HOME: this.codexCfg.codexHome } as NodeJS.ProcessEnv;
+  private env(conn: Connection, who: { agentId?: string; cwd?: string } = {}): NodeJS.ProcessEnv {
+    return { ...teamEnv(process.env, who), CODEX_HOME: this.codexHome(conn) } as NodeJS.ProcessEnv;
   }
 
   private startServer(env: NodeJS.ProcessEnv, cwd: string | undefined, tag: string): AppServerClient {
@@ -92,6 +116,8 @@ export class CodexBackend extends TeamBackend {
    * app-server protocol (dynamic tools are experimental): say so, but let it run.
    */
   private checkVersion(running: string | undefined): void {
+    if (this.versionChecked) return;
+    this.versionChecked = true;
     const tested = this.bundled?.version;
     this.fm.log.info(`codex CLI ${running ?? '?'} (${this.cmd.source}${this.cmd.source === 'bundled' ? '' : `, tested with ${tested ?? '?'}`})`);
     if (this.cmd.source !== 'bundled' && tested && running && running !== tested) {
@@ -101,40 +127,40 @@ export class CodexBackend extends TeamBackend {
     }
   }
 
-  private statusMessage(): string {
-    return `Codex (lead ${this.modelFor('lead')}, workers ${this.modelFor('worker')})`;
+  private okMessage(conn: Connection): string {
+    return `${conn.name} (lead ${modelFor(conn, 'lead') ?? 'codex default'}, workers ${modelFor(conn, 'worker') ?? 'codex default'})`;
   }
 
   /**
    * Signed in already: ok at once. Otherwise the device-code sign-in runs in the background (the
    * Foreman keeps serving the game): the code goes to the banner, the console and a notification,
-   * and the team starts as soon as Codex reports the sign-in.
+   * and the connection becomes ok as soon as Codex reports the sign-in.
    */
-  async checkAuth(): Promise<boolean> {
+  async check(conn: Connection, _secret: string | undefined, report: (r: AuthReport) => void): Promise<void> {
     if (this.opts.skipAuthCheck) {
-      this.fm.setStatus({ auth: 'ok', message: this.statusMessage() });
-      return true;
+      report({ auth: 'ok', message: this.okMessage(conn) });
+      return;
     }
-    this.fm.setStatus({ auth: 'checking', message: 'Checking the Codex sign-in...' });
+    if (this.logins.has(conn.id)) return; // a sign-in for it is already waiting on the user
+    report({ auth: 'checking', message: 'Checking the Codex sign-in...' });
     let client: AppServerClient;
     try {
-      client = this.startServer(this.env(), undefined, 'auth');
+      client = this.startServer(this.env(conn), undefined, 'auth');
       const init = await client.initialize('agentcraft_foreman', FOREMAN_VERSION);
       this.checkVersion(versionFromUserAgent(init.userAgent));
     } catch (e) {
       const hint = this.cmd.source === 'explicit' ? 'Check --codex-bin' : 'Run `npm ci` in foreman/ (it installs the Codex CLI the Foreman uses)';
-      this.markAuthFailed(`Could not start the Codex CLI (${truncate((e as Error).message, 160)}). ${hint}, then restart the Foreman. The sim backend still works.`);
-      return false;
+      report({ auth: 'failed', message: `Could not start the Codex CLI (${truncate((e as Error).message, 160)}). ${hint}, then restart the Foreman. The sim backend still works.` });
+      return;
     }
-    // until the sign-in is done nothing may run (the scheduler checks authFailed)
-    this.authFailed = true;
-    this.login = new AbortController();
-    const signal = this.login.signal;
+    const login = new AbortController();
+    this.logins.set(conn.id, login);
+    const signal = login.signal;
     const done = ensureChatgptLogin(client, {
       signal,
       onCode: (d) => {
         const msg = deviceCodeMessage(d);
-        this.fm.setStatus({ auth: 'checking', message: msg });
+        report({ auth: 'checking', message: msg });
         this.fm.log.info(msg);
         this.fm.bus.feed('system', msg);
         // in-game toast + desktop notification (and the console bell): the user has to act
@@ -144,32 +170,28 @@ export class CodexBackend extends TeamBackend {
     })
       .then((r) => {
         if (r.ok) {
-          this.authFailed = false;
           const account = describeAccount(r.account);
-          this.fm.setStatus({ auth: 'ok', account, message: this.statusMessage() });
-          this.fm.log.info(`codex auth ok (${account}, CODEX_HOME ${this.codexCfg.codexHome})`);
-          this.tick();
-          return true;
+          report({ auth: 'ok', account, message: this.okMessage(conn) });
+          this.fm.log.info(`codex auth ok (${account}, CODEX_HOME ${this.codexHome(conn)})`);
+          return;
         }
-        if (!signal.aborted) this.markAuthFailed(`Codex sign-in did not complete (${r.error}). Restart the Foreman for a new device code. The sim backend still works.`);
-        return false;
+        if (!signal.aborted) report({ auth: 'failed', message: `Codex sign-in did not complete (${r.error}). Sign in again from the Connections screen (/connect) or restart the Foreman for a new device code. The sim backend still works.` });
       })
       .catch((e) => {
-        if (!signal.aborted) this.markAuthFailed(`Codex sign-in failed: ${truncate((e as Error).message, 160)}. Restart the Foreman to try again.`);
-        return false;
+        if (!signal.aborted) report({ auth: 'failed', message: `Codex sign-in failed: ${truncate((e as Error).message, 160)}. Try again from the Connections screen (/connect).` });
       })
       .finally(() => {
+        this.logins.delete(conn.id);
         void client.close(1000).then((exited) => {
           if (!exited) killTree(client.child);
         });
       });
     // already signed in: account/read answers at once, so wait briefly for that case
-    return Promise.race([done, new Promise<boolean>((r) => setTimeout(() => r(false), 3000).unref?.())]);
+    await Promise.race([done, new Promise<void>((r) => setTimeout(r, 3000).unref?.())]);
   }
 
-  override async stop(): Promise<void> {
-    this.login?.abort();
-    await super.stop();
+  stop(): void {
+    for (const l of this.logins.values()) l.abort();
   }
 
   /** The team tools as Codex dynamic tools (JSON schema from the zod shapes). */
@@ -177,14 +199,14 @@ export class CodexBackend extends TeamBackend {
     return tools.map((t) => ({ type: 'function', name: t.name, description: t.description, inputSchema: z.toJSONSchema(z.object(t.shape)) }));
   }
 
-  protected async runTurn(spec: TurnSpec): Promise<TurnStats> {
+  async runTurn(spec: TurnSpec, conn: Connection): Promise<TurnStats> {
     const { agentId, role, cwd, entry, turn } = spec;
-    const cfg = this.codexCfg;
-    const client = this.startServer(this.env({ agentId, cwd }), cwd, agentId);
+    const cfg = this.cfg;
+    const client = this.startServer(this.env(conn, { agentId, cwd }), cwd, agentId);
     entry.child = client.child;
     entry.spawnedAt = client.spawnedAt;
     const mapper = new CodexMapper(this.fm, agentId, cwd, role);
-    const tools = buildTeamTools(this.fm, agentId, role, this.hooks, turn);
+    const tools = buildTeamTools(this.fm, agentId, role, this.host.hooks, turn);
     const byName = new Map(tools.map((t) => [t.name, t]));
     let threadId: string | undefined;
     let turnId: string | undefined;
@@ -210,7 +232,7 @@ export class CodexBackend extends TeamBackend {
     });
     client.onRequest('item/commandExecution/requestApproval', async (p) => {
       const a = p as { command?: string | null; cwd?: string | null; reason?: string | null };
-      const g = await this.gate(agentId, role, cwd, turn, turn.signal, 'Bash', { command: a.command ?? '' }, a.reason ?? undefined);
+      const g = await this.host.gate(agentId, role, cwd, turn, turn.signal, 'Bash', { command: a.command ?? '' }, a.reason ?? undefined);
       if (!g.allow) this.fm.log.debug(`${agentId}: declined command: ${g.message}`);
       return { decision: g.allow ? 'accept' : 'decline' };
     });
@@ -220,7 +242,7 @@ export class CodexBackend extends TeamBackend {
       // a write-access grant for a whole directory (no file list): judge it as a write there
       const asks = changes.length ? changes.map((c) => fileChangeTool(c, cwd)) : [{ tool: 'Write' as const, input: { file_path: path.resolve(cwd, a.grantRoot ?? '.') } }];
       for (const ask of asks) {
-        const g = await this.gate(agentId, role, cwd, turn, turn.signal, ask.tool, ask.input, a.reason ?? undefined);
+        const g = await this.host.gate(agentId, role, cwd, turn, turn.signal, ask.tool, ask.input, a.reason ?? undefined);
         if (!g.allow) return { decision: 'decline' };
       }
       return { decision: 'accept' };
@@ -243,8 +265,9 @@ export class CodexBackend extends TeamBackend {
 
     try {
       await client.initialize('agentcraft_foreman', FOREMAN_VERSION);
-      const model = role === 'lead' ? cfg.leadModel : cfg.workerModel;
-      const effort = role === 'lead' ? cfg.leadEffort : cfg.effort;
+      const model = modelFor(conn, role);
+      // effort: the command line's for the cli connection, else the connection's
+      const effort = conn.source === 'cli' ? (role === 'lead' ? cfg.leadEffort : cfg.effort) : conn.effort;
       const threadParams = {
         cwd,
         approvalPolicy: 'untrusted',
@@ -258,7 +281,7 @@ export class CodexBackend extends TeamBackend {
         : await client.request<{ thread: { id: string }; model?: string }>('thread/start', { ...threadParams, dynamicTools: this.dynamicTools(tools) });
       threadId = started.thread.id;
       mapper.stats.sessionId = threadId;
-      if (this.fm.store.data.sessions[spec.job.sessionKey]?.sessionId !== threadId) this.recordSession(spec.job.sessionKey, threadId, spec.model);
+      if (this.fm.store.data.sessions[spec.job.sessionKey]?.sessionId !== threadId) this.host.recordSession(spec.job.sessionKey, threadId, spec.model);
       if (started.model && !model) this.fm.log.debug(`${agentId}: codex model ${started.model}`);
       if (turn.signal.aborted) return mapper.stats;
       const t = await client.request<{ turn: { id: string } }>('turn/start', {
@@ -279,5 +302,17 @@ export class CodexBackend extends TeamBackend {
         if (!exited) killTree(client.child);
       }
     }
+  }
+}
+
+/** A team on one Codex connection: the `--backend codex` command line (tests use it directly). */
+export class CodexBackend extends RoutedBackend {
+  constructor(fm: Foreman, cfg: CodexConfig, opts: CodexBackendOptions = {}) {
+    super(fm, cfg, {
+      name: 'codex',
+      label: 'Codex',
+      connections: new ConnectionManager(new ConnectionStore({ home: fm.config.home, profile: fm.config.profile, cli: cliCodexConnection(cfg), secrets: new MemorySecretStore(), persist: false })),
+      runners: (host) => ({ codex: new CodexRunner(host, cfg, opts) }),
+    });
   }
 }

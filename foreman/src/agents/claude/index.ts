@@ -1,14 +1,25 @@
-// Claude backend: real Claude Agent SDK sessions for the lead and workers. The orchestration (job
-// queues, scheduling, CI + review, steering, restart recovery) lives in agents/team/backend.ts;
-// this file runs one turn as an SDK `query()` and checks Claude authentication.
+// Claude runtime: real Claude Agent SDK sessions (the Claude Code CLI) for the lead and workers.
+// The orchestration (job queues, scheduling, CI + review, steering, restart recovery) lives in
+// agents/team/backend.ts and the connection routing in agents/team/routed.ts; this file runs one
+// turn as an SDK `query()` on a connection and checks a connection's access.
+//
+// Every Claude-runtime provider (environment, Anthropic API, claude.ai login, cloud, DeepSeek,
+// Anthropic-compatible endpoints) runs this same CLI; connections/providers.ts gives each its
+// environment.
 import { spawn } from 'node:child_process';
 import { query, type CanUseTool, type Options, type PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { ClaudeConfig } from '../../config.js';
 import { FOREMAN_VERSION } from '../../config.js';
 import type { Foreman } from '../../foreman.js';
-import { TeamBackend, teamEnv, type Role, type TurnSpec, type TurnStats } from '../team/backend.js';
+import { ConnectionManager } from '../../connections/manager.js';
+import { claudeEnv, ConnectionTestError, listModels, modelFor, provider, type FetchFn } from '../../connections/providers.js';
+import { MemorySecretStore } from '../../connections/secrets.js';
+import { ConnectionStore } from '../../connections/store.js';
+import { CLI_CONNECTION_ID, type Connection } from '../../connections/types.js';
+import { teamEnv, type Role, type TurnSpec, type TurnStats } from '../team/backend.js';
+import { RoutedBackend, type AuthReport, type RunnerHost, type RuntimeRunner } from '../team/routed.js';
 import type { TurnHandle } from '../team/tools.js';
-import { detectApiAuth, NO_API_AUTH_MESSAGE, withAuthMode } from './auth.js';
+import { detectApiAuth, NO_API_AUTH_MESSAGE } from './auth.js';
 import { StreamMapper } from './stream.js';
 import { buildMcpServer, MCP_SERVER } from './tools.js';
 
@@ -30,69 +41,104 @@ export interface ClaudeBackendOptions {
   queryFn?: typeof query;
   /** skip the startup auth probe (tests) */
   skipAuthCheck?: boolean;
+  /** injectable for tests (API-key connection tests) */
+  fetchFn?: FetchFn;
 }
 
-export class ClaudeBackend extends TeamBackend {
-  readonly name = 'claude' as const;
-  protected readonly label = 'Claude';
+/** The connection `--backend claude` (flags, env, config.json) describes. */
+export function cliClaudeConnection(cfg: ClaudeConfig): Connection {
+  return {
+    id: CLI_CONNECTION_ID,
+    name: 'Claude',
+    provider: 'claude-env',
+    models: { lead: cfg.leadModel, worker: cfg.workerModel },
+    useClaudeLogin: cfg.useClaudeLogin,
+    source: 'cli',
+    createdAt: 0,
+  };
+}
+
+export class ClaudeRunner implements RuntimeRunner {
+  readonly runtime = 'claude' as const;
   private readonly queryFn: typeof query;
+  private readonly fetchFn: FetchFn;
 
   constructor(
-    fm: Foreman,
-    private claudeCfg: ClaudeConfig,
+    private host: RunnerHost,
+    private cfg: ClaudeConfig,
     private opts: ClaudeBackendOptions = {},
   ) {
-    super(fm, claudeCfg);
     this.queryFn = opts.queryFn ?? query;
+    this.fetchFn = opts.fetchFn ?? ((url, init) => fetch(url, init));
   }
 
-  protected modelFor(role: Role): string {
-    return role === 'lead' ? this.claudeCfg.leadModel : this.claudeCfg.workerModel;
+  private get fm(): Foreman {
+    return this.host.fm;
   }
 
-  protected authFailureMessage(detail: string, thrown: boolean): string {
-    return thrown ? `Claude authentication failed: ${detail}` : `Claude authentication failed (${detail}). Run \`claude\` and /login, then restart the Foreman.`;
+  private okMessage(conn: Connection): string {
+    return `${conn.name} (lead ${modelFor(conn, 'lead') ?? 'default'}, workers ${modelFor(conn, 'worker') ?? 'default'})`;
   }
 
-  private env(who: { agentId?: string; cwd?: string } = {}): Record<string, string | undefined> {
-    return withAuthMode(agentEnv(process.env, who), this.claudeCfg.useClaudeLogin);
+  private env(conn: Connection, secret: string | undefined, model: string | undefined, who: { agentId?: string; cwd?: string } = {}): Record<string, string | undefined> {
+    return claudeEnv(agentEnv(process.env, who), conn, secret, model);
   }
 
-  async checkAuth(): Promise<boolean> {
-    const cfg = this.claudeCfg;
+  authFailureMessage(conn: Connection, detail: string, thrown: boolean): string {
+    if (conn.provider === 'claude-env' || conn.provider === 'claude-login') {
+      return thrown ? `Claude authentication failed: ${detail}` : `Claude authentication failed (${detail}). Run \`claude\` and /login, then restart the Foreman.`;
+    }
+    return `${conn.name}: authentication failed${thrown ? ': ' : ' ('}${detail}${thrown ? '' : ')'}. Check the connection's key in the Connections screen (/connect).`;
+  }
+
+  async check(conn: Connection, secret: string | undefined, report: (r: AuthReport) => void): Promise<void> {
     if (this.opts.skipAuthCheck) {
-      this.fm.setStatus({ auth: 'ok', message: `Claude (lead ${cfg.leadModel}, workers ${cfg.workerModel})` });
-      return true;
+      report({ auth: 'ok', message: this.okMessage(conn) });
+      return;
     }
-    // API authentication by default; the claude.ai login only when explicitly opted into
+    const p = provider(conn.provider);
+    // API-key endpoints: list the models (proves the key, costs no tokens)
+    if (p.needsSecret) {
+      report({ auth: 'checking', message: `Checking ${conn.name}...` });
+      try {
+        const models = await listModels(conn, secret, this.fetchFn);
+        report({ auth: 'ok', message: this.okMessage(conn), account: `${p.label}${models.length ? ` · ${models.length} models` : ''}`, models });
+      } catch (e) {
+        const msg = e instanceof ConnectionTestError ? e.message : (e as Error).message;
+        report({ auth: 'failed', message: `${conn.name}: ${msg}. Fix it in the Connections screen (/connect). The sim backend still works.` });
+      }
+      return;
+    }
+    // environment / claude.ai login / cloud: ask the CLI who it is signed in as
+    const useLogin = conn.provider === 'claude-login' || !!conn.useClaudeLogin;
     const api = detectApiAuth(process.env);
-    if (!cfg.useClaudeLogin && !api.ok) {
-      this.markAuthFailed(NO_API_AUTH_MESSAGE);
-      return false;
+    if (conn.provider === 'claude-env' && !useLogin && !api.ok) {
+      report({ auth: 'failed', message: NO_API_AUTH_MESSAGE });
+      return;
     }
-    this.fm.setStatus({ auth: 'checking', message: cfg.useClaudeLogin ? 'Checking Claude login...' : 'Checking Claude API access...' });
+    report({ auth: 'checking', message: useLogin ? 'Checking Claude login...' : 'Checking Claude API access...' });
     async function* never(): AsyncGenerator<never> {
       await new Promise(() => undefined);
     }
-    const q = this.queryFn({ prompt: never(), options: { settingSources: [], persistSession: false, permissionMode: 'default', env: this.env() } });
+    const q = this.queryFn({ prompt: never(), options: { settingSources: [], persistSession: false, permissionMode: 'default', env: this.env(conn, secret, undefined) } });
     try {
       const info = await Promise.race([q.accountInfo(), new Promise<never>((_, r) => setTimeout(() => r(new Error('timed out after 45s')), 45_000))]);
       const ok = !!(info.email || info.organization || (info.apiKeySource && info.apiKeySource !== 'none') || (info.tokenSource && info.tokenSource !== 'none') || (info.apiProvider && info.apiProvider !== 'firstParty'));
       if (!ok) throw new Error('not logged in');
-      const account = cfg.useClaudeLogin
+      const account = useLogin
         ? [info.organization, info.subscriptionType].filter(Boolean).join(' · ') || info.apiProvider || 'ok'
-        : [api.ok ? api.source : 'API', info.organization].filter(Boolean).join(' · ');
-      this.authFailed = false;
-      this.fm.setStatus({ auth: 'ok', account, message: `Claude (lead ${cfg.leadModel}, workers ${cfg.workerModel})` });
+        : conn.provider === 'cloud'
+          ? info.apiProvider ?? 'cloud'
+          : [api.ok ? api.source : 'API', info.organization].filter(Boolean).join(' · ');
+      report({ auth: 'ok', account, message: this.okMessage(conn) });
       this.fm.log.info(`claude auth ok (${account})`);
-      return true;
     } catch (e) {
-      this.markAuthFailed(
-        cfg.useClaudeLogin
+      report({
+        auth: 'failed',
+        message: useLogin
           ? `Claude login check failed: ${(e as Error).message}. Run \`claude\` and /login, then restart the Foreman. The sim backend still works.`
           : `Claude API check failed: ${(e as Error).message}. Check ANTHROPIC_API_KEY (or your cloud provider settings), then restart the Foreman. The sim backend still works.`,
-      );
-      return false;
+      });
     } finally {
       try {
         q.close();
@@ -104,20 +150,23 @@ export class ClaudeBackend extends TeamBackend {
 
   private canUseTool(agentId: string, role: Role, cwd: string, turn: TurnHandle): CanUseTool {
     return async (toolName, input, opts): Promise<PermissionResult> => {
-      const r = await this.gate(agentId, role, cwd, turn, opts.signal, toolName, input, opts.title);
+      const r = await this.host.gate(agentId, role, cwd, turn, opts.signal, toolName, input, opts.title);
       if (r.allow) return { behavior: 'allow', updatedInput: input };
       return { behavior: 'deny', message: r.message, ...(r.interrupt ? { interrupt: true } : {}) };
     };
   }
 
-  protected async runTurn(spec: TurnSpec): Promise<TurnStats> {
+  async runTurn(spec: TurnSpec, conn: Connection, secret: string | undefined): Promise<TurnStats> {
     const { job, agentId, role, cwd, model, entry, turn } = spec;
-    const cfg = this.claudeCfg;
+    const cfg = this.cfg;
+    const p = provider(conn.provider);
     const abort = entry.abort;
+    // effort: the command line's for the cli connection, else the connection's (when supported)
+    const effort = !p.effort ? undefined : conn.source === 'cli' ? (role === 'lead' ? cfg.leadEffort : cfg.effort) : ((conn.effort as Options['effort']) ?? (role === 'lead' ? cfg.leadEffort : cfg.effort));
     const options: Options = {
       cwd,
       model,
-      effort: role === 'lead' ? cfg.leadEffort : cfg.effort,
+      ...(effort ? { effort } : {}),
       maxTurns: role === 'lead' ? cfg.maxTurnsLead : cfg.maxTurnsWorker,
       settingSources: [],
       permissionMode: 'default',
@@ -125,10 +174,10 @@ export class ClaudeBackend extends TeamBackend {
       tools: role === 'lead' ? ['Read', 'Grep', 'Glob'] : ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'TodoWrite'],
       // no allowedTools: every tool call (incl. our MCP tools) goes through canUseTool/policy
       disallowedTools: ['Bash(git push:*)', 'Task', 'Agent', 'WebSearch', 'WebFetch'],
-      mcpServers: { [MCP_SERVER]: buildMcpServer(this.fm, agentId, role, this.hooks, turn) },
+      mcpServers: { [MCP_SERVER]: buildMcpServer(this.fm, agentId, role, this.host.hooks, turn) },
       systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.systemPrompt },
       abortController: abort,
-      env: this.env({ agentId, cwd }),
+      env: this.env(conn, secret, model, { agentId, cwd }),
       // we spawn the CLI ourselves (same as the SDK's local spawn) so its pid is known: a stopped
       // turn's whole process tree can then be ended before its worktree is handed on
       spawnClaudeCodeProcess: (o) => {
@@ -141,9 +190,10 @@ export class ClaudeBackend extends TeamBackend {
         return child;
       },
       ...(spec.resume ? { resume: spec.resume } : {}),
-      ...(cfg.maxBudgetUsdPerTurn ? { maxBudgetUsd: cfg.maxBudgetUsdPerTurn } : {}),
+      // a USD cap only means something where the SDK knows the prices
+      ...(cfg.maxBudgetUsdPerTurn && p.sdkCost ? { maxBudgetUsd: cfg.maxBudgetUsdPerTurn } : {}),
     };
-    const mapper = new StreamMapper(this.fm, agentId, cwd, role);
+    const mapper = new StreamMapper(this.fm, agentId, cwd, role, { sdkCost: p.sdkCost });
     const q = this.queryFn({ prompt: spec.prompt, options });
     // the abort signal alone lets a CLI finish what it is doing (seen in a real run: ~6 s of
     // further turns after /stop). close() force-ends the subprocess and its transports.
@@ -160,9 +210,21 @@ export class ClaudeBackend extends TeamBackend {
       if (abort.signal.aborted) break; // nothing from an aborted turn reaches the world
       mapper.handle(msg);
       if (mapper.stats.sessionId && this.fm.store.data.sessions[job.sessionKey]?.sessionId !== mapper.stats.sessionId) {
-        this.recordSession(job.sessionKey, mapper.stats.sessionId, model);
+        this.host.recordSession(job.sessionKey, mapper.stats.sessionId, model);
       }
     }
     return mapper.stats;
+  }
+}
+
+/** A team on one Claude connection: the `--backend claude` command line (tests use it directly). */
+export class ClaudeBackend extends RoutedBackend {
+  constructor(fm: Foreman, cfg: ClaudeConfig, opts: ClaudeBackendOptions = {}) {
+    super(fm, cfg, {
+      name: 'claude',
+      label: 'Claude',
+      connections: new ConnectionManager(new ConnectionStore({ home: fm.config.home, profile: fm.config.profile, cli: cliClaudeConnection(cfg), secrets: new MemorySecretStore(), persist: false })),
+      runners: (host) => ({ claude: new ClaudeRunner(host, cfg, opts) }),
+    });
   }
 }
