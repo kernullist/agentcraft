@@ -224,6 +224,40 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `oldNo` | integer | no | line number in base (del, ctx) |
 | `newNo` | integer | no | line number in branch (add, ctx) |
 
+### <a id="connectioninfo"></a>ConnectionInfo
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | yes |  |
+| `name` | string | yes |  |
+| `provider` | string | yes |  |
+| `providerLabel` | string | yes |  |
+| `runtime` | `claude` \| `codex` | yes |  |
+| `source` | `cli` \| `user` | yes | cli: from the Foreman command line (read-only); user: saved, editable |
+| `baseUrl` | string | no |  |
+| `secret` | string | no | masked key ("sk-…a1b2") or "env:NAME"; the key itself is never sent |
+| `models` | { lead?: string, worker?: string } | no |  |
+| `effort` | string | no |  |
+| `dataDestination` | string | yes |  |
+| `personalUse` | boolean | yes |  |
+| `auth` | [AuthStatus](#authstatus) | yes | `failed` must be shown loudly (in-world banner): the claude backend cannot run. |
+| `message` | string | no | status text: the failure, the ChatGPT device code to enter, or what it runs |
+| `account` | string | no |  |
+| `availableModels` | string[] | no | models the endpoint listed in its last test |
+| `roles` | `lead` \| `workers`[] | yes | who uses it now |
+
+### <a id="providerinfo"></a>ProviderInfo
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | yes | provider id, e.g. "deepseek", "anthropic-api", "chatgpt" |
+| `label` | string | yes |  |
+| `runtime` | `claude` \| `codex` | yes | the agent runtime that serves it |
+| `summary` | string | yes |  |
+| `dataDestination` | string | yes | where the repository code is sent: show it before the user saves the connection |
+| `personalUse` | boolean | yes | the user's own subscription login: personal use only |
+| `fields` | { key: `apiKey` \| `baseUrl` \| `leadModel` \| `workerModel` \| `effort`, label: string, kind: `secret` \| `url` \| `model` \| `choice`, required: boolean, placeholder?: string, choices?: string[] }[] | yes | the form to show |
+
 ## Foreman -> Mod
 
 ### `snapshot`
@@ -243,6 +277,9 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
 | `goals` | [Goal](#goal)[] | yes | all goals, oldest first |
 | `feed` | [FeedItem](#feeditem)[] | yes | most recent feed items, oldest first (<= 200) |
 | `logs` | [AgentLogs](#agentlogs)[] | yes | recent log tail per agent (<= 60 entries each) |
+| `connections` | [ConnectionInfo](#connectioninfo)[] | no | claude/codex backends: every connection; absent for sim |
+| `providers` | [ProviderInfo](#providerinfo)[] | no | kinds of connection the user can add (the form) |
+| `secretStore` | `keyring` \| `env-only` \| `memory` | no | env-only: no OS credential store, keys must come from env:NAME |
 
 ```json
 {
@@ -390,7 +427,62 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
         }
       ]
     }
-  ]
+  ],
+  "connections": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "provider": "deepseek",
+      "providerLabel": "DeepSeek",
+      "runtime": "claude",
+      "source": "user",
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "secret": "sk-…a1b2",
+      "models": {
+        "lead": "opus",
+        "worker": "sonnet"
+      },
+      "dataDestination": "DeepSeek (api.deepseek.com)",
+      "personalUse": false,
+      "auth": "ok",
+      "message": "DeepSeek (lead opus, workers sonnet)",
+      "account": "DeepSeek · 2 models",
+      "availableModels": [
+        "deepseek-v4-pro",
+        "deepseek-flash"
+      ],
+      "roles": [
+        "workers"
+      ]
+    }
+  ],
+  "providers": [
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "runtime": "claude",
+      "summary": "DeepSeek API through its Anthropic-compatible endpoint",
+      "dataDestination": "DeepSeek (api.deepseek.com)",
+      "personalUse": false,
+      "fields": [
+        {
+          "key": "apiKey",
+          "label": "API key",
+          "kind": "secret",
+          "required": true,
+          "placeholder": "sk-..."
+        },
+        {
+          "key": "leadModel",
+          "label": "Lead model",
+          "kind": "model",
+          "required": false,
+          "placeholder": "opus"
+        }
+      ]
+    }
+  ],
+  "secretStore": "keyring"
 }
 ```
 
@@ -814,6 +906,65 @@ Backend/auth status changed (banner).
 }
 ```
 
+### `connection.upsert`
+
+A connection was added or changed (status, roles, models). Replace by `connection.id`.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `connection` | [ConnectionInfo](#connectioninfo) | yes |  |
+
+```json
+{
+  "v": 1,
+  "type": "connection.upsert",
+  "connection": {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "provider": "deepseek",
+    "providerLabel": "DeepSeek",
+    "runtime": "claude",
+    "source": "user",
+    "baseUrl": "https://api.deepseek.com/anthropic",
+    "secret": "sk-…a1b2",
+    "models": {
+      "lead": "opus",
+      "worker": "sonnet"
+    },
+    "dataDestination": "DeepSeek (api.deepseek.com)",
+    "personalUse": false,
+    "auth": "ok",
+    "message": "DeepSeek (lead opus, workers sonnet)",
+    "account": "DeepSeek · 2 models",
+    "availableModels": [
+      "deepseek-v4-pro",
+      "deepseek-flash"
+    ],
+    "roles": [
+      "workers"
+    ]
+  }
+}
+```
+
+### `connection.remove`
+
+A connection was removed.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `connectionId` | string | yes |  |
+
+```json
+{
+  "v": 1,
+  "type": "connection.remove",
+  "connectionId": "deepseek"
+}
+```
+
 ### `ack`
 
 Reply to any client message that carried an `id`.
@@ -1022,6 +1173,88 @@ Register a local git repo (console: `/repo add <path>`).
   "type": "repo.add",
   "id": "c18",
   "path": "C:\\Projects\\agentcraft\\sandbox\\demo-app"
+}
+```
+
+### `connection.save`
+
+Add or edit a connection; it is tested right away. Ack result: `{connection}` (ConnectionInfo).
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `connection` | { id?: string, name?: string, provider: string, baseUrl?: string, apiKey?: string, apiKeyEnv?: string, models?: { lead?: string, worker?: string }, effort?: string } | yes |  |
+
+```json
+{
+  "v": 1,
+  "type": "connection.save",
+  "id": "c19",
+  "connection": {
+    "provider": "deepseek",
+    "name": "DeepSeek",
+    "apiKey": "sk-your-key",
+    "models": {
+      "lead": "opus",
+      "worker": "sonnet"
+    }
+  }
+}
+```
+
+### `connection.delete`
+
+Remove a saved connection (its key leaves the credential store). Roles that used it fall back to the command-line connection.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `connectionId` | string | yes |  |
+
+```json
+{
+  "v": 1,
+  "type": "connection.delete",
+  "id": "c20",
+  "connectionId": "deepseek"
+}
+```
+
+### `connection.test`
+
+Check a connection again (ChatGPT: starts the device-code sign-in if needed). Ack result: `{connection}`.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `connectionId` | string | yes |  |
+
+```json
+{
+  "v": 1,
+  "type": "connection.test",
+  "id": "c21",
+  "connectionId": "deepseek"
+}
+```
+
+### `connection.assign`
+
+Use a connection for the lead, the workers or both, from the next turn. Ack result: `{lead, workers}`.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `connectionId` | string | yes |  |
+| `role` | `lead` \| `workers` \| `all` | yes | lead = Marlow, workers = everyone else; applies from the next turn |
+
+```json
+{
+  "v": 1,
+  "type": "connection.assign",
+  "id": "c22",
+  "connectionId": "deepseek",
+  "role": "workers"
 }
 ```
 

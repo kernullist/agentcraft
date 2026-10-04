@@ -6,7 +6,7 @@
 //
 // Auth is per connection: a failed worker connection blocks the workers only. The Foreman status
 // (banner) is the assigned connections' status: one connection -> exactly its status.
-import type { Foreman } from '../../foreman.js';
+import type { ConnectionsApi, Foreman } from '../../foreman.js';
 import { ClientError } from '../../foreman.js';
 import { ConnectionManager, type ConnectionView } from '../../connections/manager.js';
 import { modelFor as connModel, provider } from '../../connections/providers.js';
@@ -194,6 +194,17 @@ export class RoutedBackend extends TeamBackend {
   }
 
   // ---- client API (protocol connection.*) ---------------------------------------------------
+
+  readonly connectionsApi: ConnectionsApi = {
+    views: () => this.connections.views(),
+    providers: () => ConnectionManager.providers(),
+    secretStore: () => this.connections.store.secretKind,
+    onEvent: (fn) => this.connections.onEvent(fn),
+    save: (input) => this.saveConnection(input),
+    remove: (id) => this.deleteConnection(id),
+    test: (id) => this.testConnection(id),
+    assign: (role, id) => this.assignConnection(role, id),
+  };
 
   views(): ConnectionView[] {
     return this.connections.views();

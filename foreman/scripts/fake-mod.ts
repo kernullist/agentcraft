@@ -8,6 +8,10 @@
 //   /repo add <path>               connect a repo
 //   /pause|/resume|/stop|/spawn @name
 //   /task <id> cancel|retry|prioritize [n]|reassign <agent>
+//   /connect                       connections (which LLM the lead and the workers use)
+//   /connect add <provider> [name=..] [key=..|keyenv=VAR] [url=..] [lead=model] [worker=model] [effort=..]
+//   /connect edit <id> [same fields]   /connect test <id>   /connect rm <id>   /connect providers
+//   /connect use <id> [lead|workers|all]
 //   /status /agents /tasks /decisions /memory [id] /feed     views
 //   /wait decision|goal|merge|<seconds>   (scripts) wait for something
 //   /quit
@@ -18,7 +22,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import WebSocket from 'ws';
-import type { Agent, Decision, DiffFile, FeedItem, Goal, MemoryEntry, Repo, ServerMessage, Task } from '../src/protocol.js';
+import type { Agent, ConnectionInfo, Decision, DiffFile, FeedItem, Goal, MemoryEntry, ProviderInfo, Repo, ServerMessage, Task } from '../src/protocol.js';
 import { parseFlags } from '../src/config.js';
 
 const { flags } = parseFlags(process.argv.slice(2));
@@ -67,6 +71,8 @@ const S = {
   memory: new Map<string, MemoryEntry>(),
   goals: new Map<string, Goal>(),
   feed: [] as FeedItem[],
+  connections: new Map<string, ConnectionInfo>(),
+  providers: [] as ProviderInfo[],
   status: undefined as undefined | { backend: string; auth: string; message?: string; costUsd?: number; userName?: string },
 };
 const counts = new Map<string, number>();
@@ -189,6 +195,9 @@ function onMessage(m: ServerMessage): void {
       m.goals.forEach((g) => S.goals.set(g.id, g));
       S.feed = m.feed;
       S.status = m.foreman;
+      S.connections.clear();
+      (m.connections ?? []).forEach((c) => S.connections.set(c.id, c));
+      S.providers = m.providers ?? [];
       out(paint('bold', `== snapshot: ${m.agents.length} agents, ${m.tasks.length} tasks, ${m.decisions.filter((d) => d.status === 'open').length} open decisions, ${m.repos.length} repos, ${m.memory.length} memory, ${m.logs.reduce((s, l) => s + l.entries.length, 0)} log lines`));
       printStatus();
       for (const d of m.decisions.filter((x) => x.status === 'open')) {
@@ -271,6 +280,14 @@ function onMessage(m: ServerMessage): void {
       S.status = m.status;
       out(paint('bold', `[status] backend ${m.status.backend} auth ${m.status.auth}${m.status.account ? ` (${m.status.account})` : ''} - ${m.status.message ?? ''}${m.status.costUsd !== undefined ? ` - $${m.status.costUsd}` : ''}`));
       break;
+    case 'connection.upsert':
+      S.connections.set(m.connection.id, m.connection);
+      out(connectionLine(m.connection));
+      break;
+    case 'connection.remove':
+      S.connections.delete(m.connectionId);
+      out(paint('dim', `[connection] ${m.connectionId} removed`));
+      break;
     case 'ack':
       if (!m.ok) out(paint('red', `[ack ${m.re}] FAILED: ${m.error}`));
       else if (m.result && Object.keys(m.result).length) out(paint('dim', `[ack ${m.re}] ok ${JSON.stringify(m.result)}`));
@@ -279,6 +296,61 @@ function onMessage(m: ServerMessage): void {
       out(paint('red', `[error] ${m.message}`));
       break;
   }
+}
+
+function connectionLine(c: ConnectionInfo): string {
+  const auth = c.auth === 'ok' ? paint('green', 'ok') : c.auth === 'failed' ? paint('red', 'failed') : paint('yellow', c.auth);
+  const roles = c.roles.length ? paint('cyan', ` [${c.roles.join('+')}]`) : '';
+  const models = c.models ? ` lead ${c.models.lead ?? '-'} / workers ${c.models.worker ?? '-'}` : '';
+  return `[connection] ${c.id}${roles} ${c.name} (${c.providerLabel}${c.secret ? `, key ${c.secret}` : ''})${models} ${auth}${c.message ? ` - ${c.message}` : ''}`;
+}
+
+/** key=value options of /connect add|edit (values may be "quoted with spaces"). */
+function connectOptions(args: string): Record<string, string> {
+  const o: Record<string, string> = {};
+  for (const m of args.matchAll(/(\w+)=("([^"]*)"|\S+)/g)) o[m[1]!] = m[3] ?? m[2]!;
+  return o;
+}
+
+function connectCommand(args: string[], rest: string): void {
+  const sub = args[0] ?? 'list';
+  if (sub === 'list') {
+    if (!S.connections.size) return out('no connections (this Foreman runs the sim backend?)');
+    for (const c of S.connections.values()) out(connectionLine(c));
+    return;
+  }
+  if (sub === 'providers') {
+    for (const p of S.providers) out(`${p.id.padEnd(22)} ${p.label} - ${p.summary}. Code goes to: ${p.dataDestination}. Fields: ${p.fields.map((f) => `${f.key}${f.required ? '*' : ''}`).join(', ') || '(none)'}`);
+    return;
+  }
+  if (sub === 'add' || sub === 'edit') {
+    const target = args[1];
+    if (!target) return out(`usage: /connect ${sub} <${sub === 'add' ? 'provider' : 'id'}> [name=..] [key=..|keyenv=VAR] [url=..] [lead=model] [worker=model] [effort=..]`);
+    const o = connectOptions(rest.replace(/^\S+\s+\S+/, ''));
+    const existing = sub === 'edit' ? S.connections.get(target) : undefined;
+    if (sub === 'edit' && !existing) return out(paint('red', `no connection ${target}`));
+    const models = { ...(o.lead ? { lead: o.lead } : {}), ...(o.worker ? { worker: o.worker } : {}) };
+    send({
+      type: 'connection.save',
+      connection: {
+        provider: existing?.provider ?? target,
+        ...(existing ? { id: existing.id } : {}),
+        ...(o.name ? { name: o.name } : {}),
+        ...(o.url ? { baseUrl: o.url } : {}),
+        ...(o.key ? { apiKey: o.key } : {}),
+        ...(o.keyenv ? { apiKeyEnv: o.keyenv } : {}),
+        ...(Object.keys(models).length ? { models } : {}),
+        ...(o.effort ? { effort: o.effort } : {}),
+      },
+    });
+    return;
+  }
+  const id = args[1];
+  if (!id) return out(`usage: /connect ${sub} <id>`);
+  if (sub === 'test') send({ type: 'connection.test', connectionId: id });
+  else if (sub === 'rm' || sub === 'remove') send({ type: 'connection.delete', connectionId: id });
+  else if (sub === 'use') send({ type: 'connection.assign', connectionId: id, role: args[2] ?? 'all' });
+  else out('usage: /connect [list|providers|add|edit|test|use|rm]');
 }
 
 function maybeAuto(d: Decision): void {
@@ -309,7 +381,8 @@ function waitFor(test: (m: ServerMessage) => boolean, timeoutMs = 30 * 60_000): 
 async function command(line: string): Promise<void> {
   const text = line.trim();
   if (!text || text.startsWith('#')) return;
-  transcript?.write(`${stamp()} > ${text}\n`);
+  // an API key typed into /connect never reaches the transcript
+  transcript?.write(`${stamp()} > ${text.replace(/\bkey=("[^"]*"|\S+)/g, 'key=***')}\n`);
   if (!text.startsWith('/')) {
     if (text.startsWith('@')) send({ type: 'user.message', to: 'all', text });
     else send({ type: 'goal.submit', text });
@@ -368,6 +441,10 @@ async function command(line: string): Promise<void> {
     case 'task':
       if (!args[0] || !args[1]) return out('usage: /task <id> cancel|retry|prioritize [n]|reassign <agent>');
       send({ type: 'task.action', taskId: args[0], action: args[1], ...(args[2] ? { arg: args[2].replace(/^@/, '') } : {}) });
+      return;
+    case 'connect':
+    case 'connections':
+      connectCommand(args, rest);
       return;
     case 'status':
       printStatus();

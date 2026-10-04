@@ -104,6 +104,8 @@ export interface Config {
   claude: ClaudeConfig;
   codex: CodexConfig;
   sim: SimConfig;
+  /** --connection / --lead-connection / --worker-connection: use these saved connections this run */
+  connections: { lead?: string; workers?: string };
 }
 
 type Flags = Record<string, string | boolean>;
@@ -182,7 +184,7 @@ export const KNOWN_FLAGS = new Set([
   'toast-silent', 'debug', 'quiet', 'allow-browser-origins', 'repo-poll-ms', 'merge-style', 'sign-merges',
   'lead-model', 'worker-model', 'effort', 'lead-effort', 'max-turns', 'max-turns-lead', 'max-turns-worker',
   'max-concurrent', 'ci', 'max-budget', 'resume', 'lead-review', 'speed', 'seed', 'showcase', 'auto-answer',
-  'ambient', 'codex-home', 'codex-bin',
+  'ambient', 'codex-home', 'codex-bin', 'connection', 'lead-connection', 'worker-connection',
 ]);
 
 /**
@@ -271,6 +273,10 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv = process.env)
       leadReview: bool(flags['lead-review'] ?? fileClaude.leadReview, true),
       useClaudeLogin: bool(flags['use-claude-login'] ?? env.AGENTCRAFT_USE_CLAUDE_LOGIN ?? fileClaude.useClaudeLogin, false),
     },
+    connections: {
+      ...((str(flags['lead-connection']) ?? str(flags.connection) ?? str(env.AGENTCRAFT_CONNECTION)) ? { lead: str(flags['lead-connection']) ?? str(flags.connection) ?? str(env.AGENTCRAFT_CONNECTION) } : {}),
+      ...((str(flags['worker-connection']) ?? str(flags.connection) ?? str(env.AGENTCRAFT_CONNECTION)) ? { workers: str(flags['worker-connection']) ?? str(flags.connection) ?? str(env.AGENTCRAFT_CONNECTION) } : {}),
+    },
     codex: {
       leadModel: str(flags['lead-model']) ?? model ?? str(env.AGENTCRAFT_LEAD_MODEL) ?? str(fileCodex.leadModel),
       workerModel: str(flags['worker-model']) ?? model ?? str(env.AGENTCRAFT_WORKER_MODEL) ?? str(fileCodex.workerModel),
@@ -318,6 +324,13 @@ usage: npm run start -- [options]
   --no-sign-merges         never sign approved merge commits (default: signed when your git
                            config has commit.gpgsign=true; claude and codex backends only)
   --debug                  verbose logging
+
+ connections (claude and codex backends)
+  The command line above describes the default connection ("cli"). More connections (Anthropic
+  API, DeepSeek, any Anthropic-compatible endpoint, ChatGPT, ...) are added in the game (console
+  /connect) or the TUI; they live in <home>/connections.json, their keys in the OS credential store.
+  --connection <id>        use this saved connection for the whole team this run (env AGENTCRAFT_CONNECTION)
+  --lead-connection <id> / --worker-connection <id>   the same for one role
 
  sim backend
   --speed <x>              speed multiplier (default 1)

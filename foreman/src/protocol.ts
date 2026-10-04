@@ -221,6 +221,50 @@ export const ForemanStatus = z.object({
 });
 export type ForemanStatus = z.infer<typeof ForemanStatus>;
 
+// Connections (which LLM the lead and the workers use; docs/adr/0002) -----------------------
+
+export const ConnectionField = z.object({
+  key: z.enum(['apiKey', 'baseUrl', 'leadModel', 'workerModel', 'effort']),
+  label: z.string(),
+  kind: z.enum(['secret', 'url', 'model', 'choice']).describe('secret: write-only (never sent back), model: free text with suggestions from `availableModels`'),
+  required: z.boolean(),
+  placeholder: z.string().optional(),
+  choices: z.array(z.string()).optional().describe('kind "choice"'),
+});
+export type ConnectionField = z.infer<typeof ConnectionField>;
+
+export const ProviderInfo = z.object({
+  id: z.string().describe('provider id, e.g. "deepseek", "anthropic-api", "chatgpt"'),
+  label: z.string(),
+  runtime: z.enum(['claude', 'codex']).describe('the agent runtime that serves it'),
+  summary: z.string(),
+  dataDestination: z.string().describe('where the repository code is sent: show it before the user saves the connection'),
+  personalUse: z.boolean().describe("the user's own subscription login: personal use only"),
+  fields: z.array(ConnectionField).describe('the form to show'),
+});
+export type ProviderInfo = z.infer<typeof ProviderInfo>;
+
+export const ConnectionInfo = z.object({
+  id: Id,
+  name: z.string(),
+  provider: z.string(),
+  providerLabel: z.string(),
+  runtime: z.enum(['claude', 'codex']),
+  source: z.enum(['cli', 'user']).describe('cli: from the Foreman command line (read-only); user: saved, editable'),
+  baseUrl: z.string().optional(),
+  secret: z.string().optional().describe('masked key ("sk-…a1b2") or "env:NAME"; the key itself is never sent'),
+  models: z.object({ lead: z.string().optional(), worker: z.string().optional() }).optional(),
+  effort: z.string().optional(),
+  dataDestination: z.string(),
+  personalUse: z.boolean(),
+  auth: AuthStatus,
+  message: z.string().optional().describe('status text: the failure, the ChatGPT device code to enter, or what it runs'),
+  account: z.string().optional(),
+  availableModels: z.array(z.string()).optional().describe('models the endpoint listed in its last test'),
+  roles: z.array(z.enum(['lead', 'workers'])).describe('who uses it now'),
+});
+export type ConnectionInfo = z.infer<typeof ConnectionInfo>;
+
 export const AgentLogs = z.object({ agentId: Id, entries: z.array(LogEntry) });
 export type AgentLogs = z.infer<typeof AgentLogs>;
 
@@ -277,6 +321,9 @@ export const SnapshotMsg = z.object({
   goals: z.array(Goal).describe('all goals, oldest first'),
   feed: z.array(FeedItem).describe('most recent feed items, oldest first (<= 200)'),
   logs: z.array(AgentLogs).describe('recent log tail per agent (<= 60 entries each)'),
+  connections: z.array(ConnectionInfo).optional().describe('claude/codex backends: every connection; absent for sim'),
+  providers: z.array(ProviderInfo).optional().describe('kinds of connection the user can add (the form)'),
+  secretStore: z.enum(['keyring', 'env-only', 'memory']).optional().describe('env-only: no OS credential store, keys must come from env:NAME'),
 });
 export const AgentUpsertMsg = z.object({ ...envelope('agent.upsert'), agent: Agent });
 export const AgentLogMsg = z.object({ ...envelope('agent.log'), agentId: Id, entries: z.array(LogEntry) });
@@ -326,6 +373,9 @@ export const ErrorMsg = z.object({
   re: z.string().optional(),
 });
 
+export const ConnectionUpsertMsg = z.object({ ...envelope('connection.upsert'), connection: ConnectionInfo });
+export const ConnectionRemoveMsg = z.object({ ...envelope('connection.remove'), connectionId: Id });
+
 export const ServerMessage = z.discriminatedUnion('type', [
   SnapshotMsg,
   AgentUpsertMsg,
@@ -340,6 +390,8 @@ export const ServerMessage = z.discriminatedUnion('type', [
   DiffMsg,
   NotifyMsg,
   ForemanStatusMsg,
+  ConnectionUpsertMsg,
+  ConnectionRemoveMsg,
   AckMsg,
   ErrorMsg,
 ]);
@@ -395,6 +447,26 @@ export const DiffRequestMsg = z.object({
   worktree: Id.describe('worktree id (e.g. "kit-t2"); an agent id resolves to that agent\'s current worktree'),
 });
 export const RepoAddMsg = z.object({ ...envelope('repo.add'), path: z.string().min(1) });
+export const ConnectionSaveMsg = z.object({
+  ...envelope('connection.save'),
+  connection: z.object({
+    id: Id.optional().describe('absent: a new connection'),
+    name: z.string().max(40).optional(),
+    provider: z.string().min(1),
+    baseUrl: z.string().max(300).optional(),
+    apiKey: z.string().max(500).optional().describe('write-only: stored in the OS credential store, never echoed or logged; absent keeps the saved key'),
+    apiKeyEnv: z.string().max(100).optional().describe('or take the key from this environment variable of the Foreman'),
+    models: z.object({ lead: z.string().optional(), worker: z.string().optional() }).optional(),
+    effort: z.string().optional(),
+  }),
+});
+export const ConnectionDeleteMsg = z.object({ ...envelope('connection.delete'), connectionId: Id });
+export const ConnectionTestMsg = z.object({ ...envelope('connection.test'), connectionId: Id });
+export const ConnectionAssignMsg = z.object({
+  ...envelope('connection.assign'),
+  connectionId: Id,
+  role: z.enum(['lead', 'workers', 'all']).describe('lead = Marlow, workers = everyone else; applies from the next turn'),
+});
 
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMsg,
@@ -405,6 +477,10 @@ export const ClientMessage = z.discriminatedUnion('type', [
   AgentActionMsg,
   DiffRequestMsg,
   RepoAddMsg,
+  ConnectionSaveMsg,
+  ConnectionDeleteMsg,
+  ConnectionTestMsg,
+  ConnectionAssignMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -465,6 +541,8 @@ export const SERVER_MESSAGES = {
   diff: { schema: DiffMsg, doc: 'Reply to `diff.request` (sent only to the requesting client). Structured unified diff of worktree vs base, including uncommitted changes.' },
   notify: { schema: NotifyMsg, doc: 'Toast/banner for the player. `need_user` = a decision is waiting (play a bell).' },
   'foreman.status': { schema: ForemanStatusMsg, doc: 'Backend/auth status changed (banner).' },
+  'connection.upsert': { schema: ConnectionUpsertMsg, doc: 'A connection was added or changed (status, roles, models). Replace by `connection.id`.' },
+  'connection.remove': { schema: ConnectionRemoveMsg, doc: 'A connection was removed.' },
   ack: { schema: AckMsg, doc: 'Reply to any client message that carried an `id`.' },
   error: { schema: ErrorMsg, doc: 'A client message was invalid or failed (also sent as ack.ok=false when it had an id).' },
 } as const;
@@ -478,6 +556,10 @@ export const CLIENT_MESSAGES = {
   'agent.action': { schema: AgentActionMsg, doc: 'Pause/resume/stop an agent, or spawn (activate) an off-shift worker.' },
   'diff.request': { schema: DiffRequestMsg, doc: 'Ask for the structured diff of a worktree. Answered with `diff` (same requestId).' },
   'repo.add': { schema: RepoAddMsg, doc: 'Register a local git repo (console: `/repo add <path>`).' },
+  'connection.save': { schema: ConnectionSaveMsg, doc: 'Add or edit a connection; it is tested right away. Ack result: `{connection}` (ConnectionInfo).' },
+  'connection.delete': { schema: ConnectionDeleteMsg, doc: 'Remove a saved connection (its key leaves the credential store). Roles that used it fall back to the command-line connection.' },
+  'connection.test': { schema: ConnectionTestMsg, doc: 'Check a connection again (ChatGPT: starts the device-code sign-in if needed). Ack result: `{connection}`.' },
+  'connection.assign': { schema: ConnectionAssignMsg, doc: 'Use a connection for the lead, the workers or both, from the next turn. Ack result: `{lead, workers}`.' },
 } as const;
 
 export const ENTITY_SCHEMAS = {
@@ -496,6 +578,8 @@ export const ENTITY_SCHEMAS = {
   DiffFile,
   DiffHunk,
   DiffLine,
+  ConnectionInfo,
+  ProviderInfo,
 } as const;
 
 /** Merge decision option labels (exact strings). */

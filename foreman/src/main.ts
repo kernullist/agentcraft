@@ -2,8 +2,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ClaudeBackend } from './agents/claude/index.js';
-import { CodexBackend } from './agents/codex/index.js';
+import { ClaudeRunner, cliClaudeConnection } from './agents/claude/index.js';
+import { cliCodexConnection, CodexRunner } from './agents/codex/index.js';
+import { RoutedBackend } from './agents/team/routed.js';
+import { ConnectionManager } from './connections/manager.js';
+import { KeyringSecretStore } from './connections/secrets.js';
+import { ConnectionError, ConnectionStore } from './connections/store.js';
 import { SimBackend } from './agents/sim/index.js';
 import { DEFAULT_SIM_GOAL } from './agents/sim/scenario.js';
 import { FOREMAN_VERSION, HELP, loadConfig, type Config } from './config.js';
@@ -61,8 +65,33 @@ export async function main(argv: string[]): Promise<void> {
     cfg.repos.push(demo);
   }
 
+  // claude / codex: the team runs on connections. The command line describes the default one
+  // ("cli"); saved connections (<home>/connections.json, keys in the OS credential store) and
+  // their assignment can be changed from the game while the Foreman runs.
+  let connections: ConnectionManager | undefined;
+  if (cfg.backend !== 'sim') {
+    try {
+      const cli = cfg.backend === 'codex' ? cliCodexConnection(cfg.codex) : cliClaudeConnection(cfg.claude);
+      const secrets = new KeyringSecretStore(cfg.home);
+      if (secrets.kind !== 'keyring') log.warn('no OS credential store here: connection keys can only come from environment variables (env:NAME)');
+      connections = new ConnectionManager(new ConnectionStore({ home: cfg.home, profile: cfg.profile, cli, secrets, forced: cfg.connections }));
+    } catch (e) {
+      if (!(e instanceof ConnectionError)) throw e;
+      log.error(e.message);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
   const foreman = new Foreman({ config: cfg, logger: log });
-  const backend = cfg.backend === 'sim' ? new SimBackend(foreman, cfg.sim) : cfg.backend === 'codex' ? new CodexBackend(foreman, cfg.codex) : new ClaudeBackend(foreman, cfg.claude);
+  const backend =
+    cfg.backend === 'sim'
+      ? new SimBackend(foreman, cfg.sim)
+      : new RoutedBackend(foreman, cfg.backend === 'codex' ? cfg.codex : cfg.claude, {
+          name: cfg.backend,
+          connections: connections!,
+          runners: (host) => ({ claude: new ClaudeRunner(host, cfg.claude), codex: new CodexRunner(host, cfg.codex) }),
+        });
   const server = new ForemanServer(foreman, { host: cfg.host, port: cfg.port, allowBrowserOrigins: cfg.allowBrowserOrigins, validateOutbound: cfg.debug, log });
 
   try {

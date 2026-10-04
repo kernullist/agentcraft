@@ -61,6 +61,12 @@ describe('loadConfig argument checking', () => {
     expect(() => load(['--backend', 'codex', '--effort', 'max'])).toThrow(/unknown effort "max" for codex/);
   });
 
+  it('reads --connection / --lead-connection / --worker-connection', () => {
+    expect(load(['--backend', 'claude']).connections).toEqual({});
+    expect(load(['--connection', 'deepseek']).connections).toEqual({ lead: 'deepseek', workers: 'deepseek' });
+    expect(load(['--connection', 'deepseek', '--lead-connection', 'cli']).connections).toEqual({ lead: 'cli', workers: 'deepseek' });
+  });
+
   it('refuses an unknown effort instead of falling back to medium', () => {
     expect(() => load(['--effort', 'lo'])).toThrow(/unknown effort "lo"/);
   });

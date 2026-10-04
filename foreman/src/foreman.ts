@@ -11,14 +11,17 @@ import { consoleLogger, type Ctx, type Logger } from './context.js';
 import { DecisionError, DecisionQueue, type CreateDecisionInput } from './decisions.js';
 import { Memory, MemoryError } from './memory.js';
 import { Notifier } from './notifier.js';
+import type { ConnectionInput } from './connections/store.js';
 import type {
   Agent,
   AgentState,
   ClientMessage,
+  ConnectionInfo,
   Decision,
   ForemanStatus,
   Goal,
   GoalStatus,
+  ProviderInfo,
   LogEntry,
   LogKind,
   Outbound,
@@ -31,8 +34,22 @@ import { TaskError, TaskGraph } from './taskgraph.js';
 import { setUserName, userName } from './user.js';
 import { truncate } from './util/text.js';
 
+/** The connection list a real-agent backend offers to clients (protocol connection.*). */
+export interface ConnectionsApi {
+  views(): ConnectionInfo[];
+  providers(): ProviderInfo[];
+  secretStore(): 'keyring' | 'env-only' | 'memory';
+  onEvent(fn: (e: { type: 'upsert'; view: ConnectionInfo } | { type: 'remove'; id: string } | { type: 'assign'; assignment: { lead: string; workers: string } }) => void): void;
+  save(input: ConnectionInput): Promise<ConnectionInfo>;
+  remove(id: string): { lead: string; workers: string };
+  test(id: string): Promise<ConnectionInfo>;
+  assign(role: 'lead' | 'workers' | 'all', id: string): Promise<{ lead: string; workers: string }>;
+}
+
 export interface Backend {
   readonly name: 'sim' | 'claude' | 'codex';
+  /** claude/codex: the connections (which LLM the lead and the workers use) */
+  readonly connectionsApi?: ConnectionsApi;
   /** Called once after the core is ready (and after restart: resume work). */
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -476,7 +493,14 @@ export class Foreman {
       goals: this.goals().map((g) => ({ ...g })),
       feed: this.store.data.feed.slice(-200),
       logs: this.agents().map((a) => ({ agentId: a.id, entries: this.store.logTail(a.id).slice(-60) })),
+      ...(this.backend?.connectionsApi ? { connections: this.backend.connectionsApi.views(), providers: this.backend.connectionsApi.providers(), secretStore: this.backend.connectionsApi.secretStore() } : {}),
     };
+  }
+
+  private connections(): ConnectionsApi {
+    const api = this.backend?.connectionsApi;
+    if (!api) throw new ClientError(`connections need the claude or codex backend (this Foreman runs ${this.config.backend})`);
+    return api;
   }
 
   // ---- inbound ------------------------------------------------------------------------------
@@ -535,6 +559,30 @@ export class Foreman {
         this.bus.feed('system', `Repo connected: ${r.name} (${r.branch})`);
         return { repoId: r.id };
       }
+      case 'connection.save': {
+        const { connection: c } = msg;
+        const view = await this.connections().save({
+          provider: c.provider as ConnectionInput['provider'],
+          ...(c.id ? { id: c.id } : {}),
+          ...(c.name !== undefined ? { name: c.name } : {}),
+          ...(c.baseUrl !== undefined ? { baseUrl: c.baseUrl } : {}),
+          ...(c.apiKey ? { apiKey: c.apiKey } : {}),
+          ...(c.apiKeyEnv ? { apiKeyEnv: c.apiKeyEnv } : {}),
+          ...(c.models ? { models: c.models } : {}),
+          ...(c.effort ? { effort: c.effort } : {}),
+        });
+        this.bus.feed('system', `Connection ${c.id ? 'updated' : 'added'}: ${view.name} (${view.providerLabel}) - ${view.auth === 'ok' ? 'works' : view.message ?? view.auth}`);
+        return { connection: view };
+      }
+      case 'connection.delete': {
+        const a = this.connections().remove(msg.connectionId);
+        this.bus.feed('system', `Connection removed: ${msg.connectionId}`);
+        return { ...a };
+      }
+      case 'connection.test':
+        return { connection: await this.connections().test(msg.connectionId) };
+      case 'connection.assign':
+        return { ...(await this.connections().assign(msg.role, msg.connectionId)) };
     }
   }
 
@@ -619,6 +667,10 @@ export class Foreman {
 
   async start(backend: Backend): Promise<void> {
     this.backend = backend;
+    backend.connectionsApi?.onEvent((e) => {
+      if (e.type === 'upsert') this.emit({ type: 'connection.upsert', connection: e.view });
+      else if (e.type === 'remove') this.emit({ type: 'connection.remove', connectionId: e.id });
+    });
     for (const p of this.config.repos) {
       try {
         const r = await this.repos.add(p);

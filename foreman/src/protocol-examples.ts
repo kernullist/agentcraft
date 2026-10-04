@@ -88,6 +88,25 @@ const memory: MemoryEntry = {
   author: 'marlow',
 };
 
+const connection = {
+  id: 'deepseek',
+  name: 'DeepSeek',
+  provider: 'deepseek',
+  providerLabel: 'DeepSeek',
+  runtime: 'claude' as const,
+  source: 'user' as const,
+  baseUrl: 'https://api.deepseek.com/anthropic',
+  secret: 'sk-…a1b2',
+  models: { lead: 'opus', worker: 'sonnet' },
+  dataDestination: 'DeepSeek (api.deepseek.com)',
+  personalUse: false,
+  auth: 'ok' as const,
+  message: 'DeepSeek (lead opus, workers sonnet)',
+  account: 'DeepSeek · 2 models',
+  availableModels: ['deepseek-v4-pro', 'deepseek-flash'],
+  roles: ['workers' as const],
+};
+
 type Ex<T> = Record<string, T>;
 
 export const SERVER_EXAMPLES: Ex<ServerMessage> = {
@@ -104,6 +123,22 @@ export const SERVER_EXAMPLES: Ex<ServerMessage> = {
     goals: [{ id: 'g1', text: 'Add #tags to pocket-notes', progress: 0.39, status: 'active', repoId: 'demo-app', createdAt: ts, updatedAt: ts + 120_000 }],
     feed: [{ ts: ts + 5_000, kind: 'plan', text: 'Marlow planned the goal into 9 tasks', agentId: 'marlow' }],
     logs: [{ agentId: 'kit', entries: [{ ts: ts + 90_000, kind: 'tool', text: 'Edit src/tags.ts' }] }],
+    connections: [connection],
+    providers: [
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        runtime: 'claude',
+        summary: 'DeepSeek API through its Anthropic-compatible endpoint',
+        dataDestination: 'DeepSeek (api.deepseek.com)',
+        personalUse: false,
+        fields: [
+          { key: 'apiKey', label: 'API key', kind: 'secret', required: true, placeholder: 'sk-...' },
+          { key: 'leadModel', label: 'Lead model', kind: 'model', required: false, placeholder: 'opus' },
+        ],
+      },
+    ],
+    secretStore: 'keyring',
   },
   'agent.upsert': { v: 1, type: 'agent.upsert', agent },
   'agent.log': {
@@ -118,6 +153,8 @@ export const SERVER_EXAMPLES: Ex<ServerMessage> = {
   },
   'agent.say': { v: 1, type: 'agent.say', agentId: 'kit', to: 'juniper', text: 'parseTags() is in src/tags.ts - you are unblocked once it merges.', ts: ts + 95_000 },
   'task.upsert': { v: 1, type: 'task.upsert', task },
+  'connection.upsert': { v: 1, type: 'connection.upsert', connection },
+  'connection.remove': { v: 1, type: 'connection.remove', connectionId: 'deepseek' },
   'decision.upsert': { v: 1, type: 'decision.upsert', decision },
   'repo.upsert': { v: 1, type: 'repo.upsert', repo },
   'memory.upsert': { v: 1, type: 'memory.upsert', entry: memory },
@@ -193,4 +230,8 @@ export const CLIENT_EXAMPLES: Ex<ClientMessage> = {
   'agent.action': { v: 1, type: 'agent.action', id: 'c16', agentId: 'juniper', action: 'pause' },
   'diff.request': { v: 1, type: 'diff.request', id: 'c17', requestId: 'r7', repoId: 'demo-app', worktree: 'kit-t2' },
   'repo.add': { v: 1, type: 'repo.add', id: 'c18', path: 'C:\\Projects\\agentcraft\\sandbox\\demo-app' },
+  'connection.save': { v: 1, type: 'connection.save', id: 'c19', connection: { provider: 'deepseek', name: 'DeepSeek', apiKey: 'sk-your-key', models: { lead: 'opus', worker: 'sonnet' } } },
+  'connection.delete': { v: 1, type: 'connection.delete', id: 'c20', connectionId: 'deepseek' },
+  'connection.test': { v: 1, type: 'connection.test', id: 'c21', connectionId: 'deepseek' },
+  'connection.assign': { v: 1, type: 'connection.assign', id: 'c22', connectionId: 'deepseek', role: 'workers' },
 };
