@@ -212,6 +212,13 @@ the first time; in an older world, rebuild it with `/agentcraft hq`.
 > running AgentCraft yourself. To make it permanent for yourself, put
 > `{"claude": {"useClaudeLogin": true}}` in `~/.agentcraft/config.json`.
 
+> **Personal use with a ChatGPT plan (Codex).** `tools\launch.ps1 -Backend codex` runs the same team
+> on OpenAI Codex with your own ChatGPT subscription. It needs the Codex CLI (`npm i -g @openai/codex`).
+> On first start the Foreman shows a device code (in-game banner, console, desktop notification):
+> open the URL on any device, enter the code, and the team starts. Codex keeps the sign-in in the
+> agents' own `CODEX_HOME` (`~/.agentcraft/codex/codex`, not your `~/.codex`); AgentCraft never sees
+> a token. Approvals, worktrees and the push block work as with Claude.
+
 **Your name.** The agents call you by your OS user name. Change it with
 `-ForemanArgs '--user-name','Sam'`, `AGENTCRAFT_USER_NAME`, or `{"userName": "Sam"}` in
 `~/.agentcraft/config.json`.
