@@ -11,7 +11,11 @@
        %LOCALAPPDATA%\Temp (AF_UNIX sockets fail there on some PCs; see
        docs/research/windows-build-setup.md)
     4. target repo: -Repo, default sandbox\deepseek-demo (created from the demo template if missing)
-    5. start the Foreman only (claude runtime, profile "deepseek"; tools\launch.ps1 -NoGame)
+    5. start the Foreman only (claude runtime, profile "deepseek"; tools\launch.ps1 -NoGame).
+       Another AgentCraft Foreman already running (e.g. run-codex.ps1's): this checkout runs one
+       game at a time, so -IfRunning decides: stop it (its game too; state is saved), use it (add
+       DeepSeek to that Foreman instead: its profile's saved assignment changes), or cancel.
+       Default: ask
     6. DeepSeek connection: reuse the saved one when its key still works; otherwise (first run,
        -Rekey, or a rejected key) ask for the key with hidden input and hand it to the Foreman on
        stdin (never on a command line). The Foreman keeps it in the OS credential store and tests
@@ -28,6 +32,7 @@
   .\run-deepseek.ps1 -ApiKeyEnv DEEPSEEK_API_KEY    # key from an environment variable instead
   .\run-deepseek.ps1 -Rekey                         # replace the saved key
   .\run-deepseek.ps1 -LeadModel deepseek-v4-pro -WorkerModel deepseek-flash
+  .\run-deepseek.ps1 -IfRunning stop                # stop a running codex/claude session first, no question
   tools\stop.ps1 -Profile deepseek                  # stop what this started
 #>
 [CmdletBinding(PositionalBinding = $false)]
@@ -45,6 +50,7 @@ param(
     [Alias('Home')][string]$AgentHome,
     [int]$Port = 0,
     [int]$DevPort = 0,
+    [ValidateSet('ask', 'stop', 'use', 'cancel')][string]$IfRunning = 'ask',
     [string[]]$ForemanArgs = @()
 )
 
@@ -54,6 +60,16 @@ $Launch = Join-Path $Root 'tools\launch.ps1'
 $Cli = Join-Path $Root 'tools\foremancli.mjs'
 $PsExe = (Get-Process -Id $PID).Path
 $ProfileName = 'deepseek'
+$Backend = 'claude'
+$RepoGiven = [bool]$Repo
+# -ApiKeyEnv as an env reference only works for a Foreman this script starts (a running one has
+# its environment fixed already); with -IfRunning use the value is handed over like a typed key
+$KeyEnvRef = $ApiKeyEnv
+$HomeDir = $AgentHome
+if (-not $HomeDir)
+{
+    $HomeDir = if ($env:AGENTCRAFT_HOME) { $env:AGENTCRAFT_HOME } else { Join-Path $env:USERPROFILE '.agentcraft' }
+}
 if ($Port -le 0)
 {
     $Port = 7878
@@ -78,7 +94,7 @@ function Stop-WithError([string]$Text)
 # The launch.ps1 arguments every step shares (profile, home, ports).
 function Get-CommonLaunchArgs
 {
-    $a = @('-Backend', 'claude', '-Profile', $ProfileName, '-Port', [string]$Port)
+    $a = @('-Backend', $Backend, '-Profile', $ProfileName, '-Port', [string]$Port)
     if ($AgentHome)
     {
         $a += @('-Home', $AgentHome)
@@ -123,7 +139,7 @@ function Invoke-Launch([string[]]$LaunchArgs, [string[]]$ForemanList)
 
 # foremancli connection-setup. $Key (plain text) goes to the child's stdin only, never to its
 # command line. Returns @{ code = exit code; result = parsed JSON (or $null) }.
-function Invoke-ConnectionSetup([string]$Key, [switch]$WithRekey)
+function Invoke-ConnectionSetup([string]$Key)
 {
     $cliArgs = @($Cli, 'connection-setup', '--provider', 'deepseek', '--role', $Role, '--port', [string]$Port, '--timeout', '60')
     if ($LeadModel)
@@ -134,13 +150,9 @@ function Invoke-ConnectionSetup([string]$Key, [switch]$WithRekey)
     {
         $cliArgs += @('--worker-model', $WorkerModel)
     }
-    if ($ApiKeyEnv)
+    if ($KeyEnvRef)
     {
-        $cliArgs += @('--key-env', $ApiKeyEnv)
-    }
-    if ($WithRekey)
-    {
-        $cliArgs += '--rekey'
+        $cliArgs += @('--key-env', $KeyEnvRef)
     }
     $text = $null
     if ($Key)
@@ -178,6 +190,42 @@ function Read-ApiKey
     {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
     }
+}
+
+# Foremen of other profiles running from this home (<home>/<profile>/foreman.json, pid alive).
+function Get-OtherForemen
+{
+    $list = @()
+    if (Test-Path $HomeDir)
+    {
+        foreach ($d in Get-ChildItem $HomeDir -Directory -ErrorAction SilentlyContinue)
+        {
+            $f = Join-Path $d.FullName 'foreman.json'
+            if (-not (Test-Path $f))
+            {
+                continue
+            }
+            $info = $null
+            try
+            {
+                $info = Get-Content $f -Raw | ConvertFrom-Json
+            }
+            catch
+            {
+                continue
+            }
+            if (-not $info.pid -or $info.profile -eq $ProfileName)
+            {
+                continue
+            }
+            $proc = Get-Process -Id ([int]$info.pid) -ErrorAction SilentlyContinue
+            if ($proc -and $proc.ProcessName -match '^node')
+            {
+                $list += $info
+            }
+        }
+    }
+    return $list
 }
 
 function Get-JavaMajor([string]$JavaExe)
@@ -316,8 +364,75 @@ if (-not (Test-Path (Join-Path $Repo '.git')))
 Write-Host "repo $Repo"
 
 # ---- 5. Foreman -----------------------------------------------------------------------------
-Write-Step "5/7 starting the Foreman (claude runtime, profile $ProfileName, port $Port)"
-$fmArgs = (Get-CommonLaunchArgs) + @('-Repo', $Repo, '-NoGame')
+$others = @(Get-OtherForemen)
+if ($others.Count -gt 0)
+{
+    Write-Step 'another AgentCraft session is running'
+    foreach ($o in $others)
+    {
+        Write-Host ("  Foreman '{0}' ({1} backend) on port {2}, pid {3}" -f $o.profile, $o.backend, $o.port, $o.pid) -ForegroundColor Yellow
+    }
+    Write-Host '  This checkout runs one game at a time, and the game talks to one Foreman.'
+    $choice = $IfRunning
+    if ($choice -eq 'ask')
+    {
+        if ([Console]::IsInputRedirected)
+        {
+            $choice = 'cancel'
+        }
+        else
+        {
+            Write-Host '  [S] stop it (its game too; state is saved) and start the DeepSeek profile   (recommended)'
+            Write-Host ("  [U] use it: add DeepSeek to Foreman '{0}' (that profile then runs on DeepSeek)" -f $others[0].profile)
+            Write-Host '  [C] cancel'
+            $ans = Read-Host '  Choice [S/u/c]'
+            $choice = switch -Regex ($ans)
+            {
+                '^(u|use)$' { 'use' }
+                '^(c|cancel)$' { 'cancel' }
+                default { 'stop' }
+            }
+        }
+    }
+    if ($choice -eq 'cancel')
+    {
+        Stop-WithError ("cancelled. Stop it yourself (tools\stop.ps1 -Profile {0}), run this with -IfRunning stop or use, or add DeepSeek in that game: console `` /connect" -f $others[0].profile)
+    }
+    if ($choice -eq 'stop')
+    {
+        foreach ($o in $others)
+        {
+            Write-Host "stopping profile $($o.profile) ..."
+            $stopArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'tools\stop.ps1'), '-Profile', [string]$o.profile, '-Home', $HomeDir)
+            & $PsExe @stopArgs | Out-Host
+            if ($LASTEXITCODE -ne 0)
+            {
+                Stop-WithError "could not stop profile $($o.profile) (see above)"
+            }
+        }
+    }
+    if ($choice -eq 'use')
+    {
+        $o = $others[0]
+        $ProfileName = [string]$o.profile
+        $Backend = [string]$o.backend
+        $Port = [int]$o.port
+        Write-Host "using the running Foreman '$ProfileName' on port $Port" -ForegroundColor Green
+        if ($ApiKeyEnv)
+        {
+            Write-Host "  (env:$ApiKeyEnv is not in that Foreman's environment: its value is stored in the credential store instead)"
+            $KeyEnvRef = $null
+        }
+    }
+}
+
+Write-Step "5/7 starting the Foreman ($Backend backend, profile $ProfileName, port $Port)"
+$fmArgs = (Get-CommonLaunchArgs) + @('-NoGame')
+# a reused Foreman of another profile only gets a repo when you named one
+if ($Backend -eq 'claude' -and $ProfileName -eq 'deepseek' -or $RepoGiven)
+{
+    $fmArgs += @('-Repo', $Repo)
+}
 if ($Reset)
 {
     $fmArgs += '-Reset'
@@ -342,7 +457,15 @@ do
         break
     }
     $key = $null
-    if ($needKey -and -not $ApiKeyEnv)
+    if ($ApiKeyEnv -and -not $KeyEnvRef)
+    {
+        $key = [Environment]::GetEnvironmentVariable($ApiKeyEnv)
+        if (-not $key)
+        {
+            Stop-WithError "environment variable $ApiKeyEnv is empty"
+        }
+    }
+    elseif ($needKey -and -not $ApiKeyEnv)
     {
         if (-not $confirmed)
         {
@@ -365,7 +488,7 @@ do
             Stop-WithError 'no key entered'
         }
     }
-    $r = Invoke-ConnectionSetup -Key $key -WithRekey:($needKey -and -not $key -and -not $ApiKeyEnv)
+    $r = Invoke-ConnectionSetup -Key $key
     $key = $null
     if ($r.code -eq 0 -and $r.result -and $r.result.ok)
     {
@@ -410,7 +533,7 @@ if ($NoGame)
 }
 else
 {
-    $gameArgs = (Get-CommonLaunchArgs) + @('-Repo', $Repo)
+    $gameArgs = Get-CommonLaunchArgs
     $rc = Invoke-Launch $gameArgs @()
     if ($rc -ne 0)
     {
@@ -419,4 +542,4 @@ else
 }
 
 Write-Host ''
-Write-Host 'Done. Press ` in game to type a goal; /connect shows the connections. Stop everything with: tools\stop.ps1 -Profile deepseek' -ForegroundColor Green
+Write-Host "Done. Press `` in game to type a goal; /connect shows the connections. Stop everything with: tools\stop.ps1 -Profile $ProfileName" -ForegroundColor Green

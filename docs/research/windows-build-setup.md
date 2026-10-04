@@ -25,6 +25,13 @@ clean checkout(main @ 0be815d) 상태에서 mod(Fabric, MC 26.3), foreman(Node/T
    실측: 가짜 키(env, stdin 둘 다) → 실제 DeepSeek 401 → 실패 사유 출력, 로그/파일에 키 없음.
    **함정:** Windows PowerShell 5.1은 네이티브 명령 인자 안의 큰따옴표를 제거함 → `node -p 'process.versions.node.split(".")[0]'`가 SyntaxError.
    run-codex.ps1에도 있던 버그(PS7에서만 테스트해서 놓침). 바깥 큰따옴표 + 안쪽 작은따옴표로 수정. 스크립트는 PS 5.1과 7 둘 다로 검증할 것.
+7. 2026-10-04 사용자 실행 실패: `run-deepseek.ps1`이 포트 7878 충돌로 중단 — 이미 `run-codex.ps1`로 띄운 codex Foreman이 실행 중이었음.
+   포트만 바꾸면 안 되는 이유: 체크아웃당 게임 1개이고, 재사용된 게임은 원래 Foreman 포트에 붙어 있음(launch.ps1은 경고만).
+   수정: 시작 전 `<home>/<profile>/foreman.json`(pid 살아 있는 node)로 다른 프로필 Foreman 감지 → `-IfRunning ask|stop|use|cancel`(기본 ask:
+   [S]top 권장 = stop.ps1로 그 게임·Foreman 정상 종료 후 진행 / [U]se = 그 Foreman에 DeepSeek 연결을 추가·배정 / [C]ancel).
+   use 경로에서 발견한 결함: `-ApiKeyEnv`의 env 참조는 이미 떠 있는 Foreman 환경엔 없음 → 이 경우 스크립트가 값을 읽어 stdin으로 넘기고 자격증명 저장소에 저장.
+   격리 홈·포트 27878에서 stop/use/cancel 세 경로 모두 실측(가짜 키는 실제 DeepSeek 401). 실패한 첫 use 테스트는 테스트 명령의 경합
+   (Foreman이 foreman.json을 쓰기 전에 스크립트 실행)이었음 — 스크립트 결함 아님.
 
 ## 환경
 - OS: Windows 11 Pro 10.0.26200, 비관리자 셸
