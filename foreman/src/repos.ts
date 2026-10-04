@@ -66,10 +66,17 @@ export interface TestResult {
 export function parseTestOutput(text: string): { failures: string[]; summary?: string } {
   const failures: string[] = [];
   for (const m of text.matchAll(/^not ok \d+ - (.+)$/gm)) failures.push(m[1]!.replace(/\\#/g, '#').replace(/\s+#\s*(TODO|SKIP).*$/i, '').trim());
-  if (!failures.length) for (const m of text.matchAll(/^\s*(?:✖|×|FAIL)\s+(.+)$/gm)) failures.push(m[1]!.trim());
+  if (!failures.length) {
+    // node --test spec reporter (the default from Node 23): failing leaf tests are repeated under
+    // "✖ failing tests:", so read only that section when present (skips suite lines and the header)
+    const section = /^✖ failing tests:\r?$/m.exec(text);
+    const scope = section ? text.slice(section.index + section[0].length) : text;
+    for (const m of scope.matchAll(/^\s*(?:✖|×|FAIL)\s+(.+?)\r?$/gm)) failures.push(m[1]!.replace(/\s+\(\d+(?:\.\d+)?ms\)$/, '').trim());
+  }
   const nums: string[] = [];
   for (const k of ['tests', 'pass', 'fail']) {
-    const m = new RegExp(`^# ${k} (\\d+)$`, 'm').exec(text);
+    // TAP: "# pass 12", spec: "ℹ pass 12"
+    const m = new RegExp(`^(?:#|ℹ) ${k} (\\d+)\\r?$`, 'm').exec(text);
     if (m) nums.push(`${k} ${m[1]}`);
   }
   return { failures: [...new Set(failures)].slice(0, 20), ...(nums.length ? { summary: nums.join(', ') } : {}) };

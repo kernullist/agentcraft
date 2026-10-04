@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Decision } from '../src/protocol.js';
 import { MERGE_OPTIONS } from '../src/protocol.js';
+import { parseTestOutput } from '../src/repos.js';
 import { git, gitOut } from '../src/util/git.js';
 import { demoRepo, makeForeman, rmrf, tempDir, type Harness } from './helpers.js';
 
@@ -256,6 +257,43 @@ describe('RepoManager', () => {
     expect(res.pass).toBe(true);
     expect(res.summary).toMatch(/pass \d+/);
     expect(res.failures).toEqual([]);
+  });
+});
+
+describe('parseTestOutput', () => {
+  it('reads TAP output (node --test before Node 23)', () => {
+    const tap = ['ok 1 - a', 'not ok 2 - b \\# x', 'not ok 3 - c # TODO later', '# tests 3', '# pass 1', '# fail 2', ''].join('\n');
+    expect(parseTestOutput(tap)).toEqual({ failures: ['b # x', 'c'], summary: 'tests 3, pass 1, fail 2' });
+  });
+
+  it('reads spec output (node --test default from Node 23), leaf failures only', () => {
+    const spec = [
+      '✔ a (0.5788ms)',
+      '✖ b # x (0.1776ms)',
+      '▶ grp',
+      '  ✖ c (0.1163ms)',
+      '✖ grp (0.3026ms)',
+      'ℹ tests 3',
+      'ℹ suites 1',
+      'ℹ pass 1',
+      'ℹ fail 2',
+      '',
+      '✖ failing tests:',
+      '',
+      'test at a.test.js:1:44',
+      '✖ b # x (0.1776ms)',
+      '  Error: x',
+      '',
+      'test at a.test.js:1:106',
+      '✖ c (0.1163ms)',
+      '  Error: y',
+      '',
+    ].join('\r\n');
+    expect(parseTestOutput(spec)).toEqual({ failures: ['b # x', 'c'], summary: 'tests 3, pass 1, fail 2' });
+  });
+
+  it('has no summary when the runner prints none', () => {
+    expect(parseTestOutput('× some test 12ms\n')).toEqual({ failures: ['some test 12ms'] });
   });
 });
 
