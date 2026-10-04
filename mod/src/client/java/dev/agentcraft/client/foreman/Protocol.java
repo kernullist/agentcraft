@@ -218,6 +218,56 @@ public final class Protocol {
 		}
 	}
 
+	// ------------------------------------------------------------------ connections (docs/adr/0002)
+
+	/** One input of the "add connection" form. kind: secret | url | model | choice. */
+	public record ConnectionField(String key, String label, String kind, boolean required, @Nullable String placeholder, List<String> choices) {
+		public ConnectionField {
+			key = key == null ? "" : key;
+			label = label == null ? key : label;
+			kind = kind == null ? "url" : kind;
+			choices = choices == null ? List.of() : List.copyOf(choices);
+		}
+	}
+
+	/** A kind of connection the user can add (DeepSeek, Anthropic API, ChatGPT, ...). */
+	public record ProviderInfo(String id, String label, String runtime, String summary, String dataDestination, boolean personalUse,
+		List<ConnectionField> fields) {
+		public ProviderInfo {
+			label = label == null ? id : label;
+			summary = summary == null ? "" : summary;
+			dataDestination = dataDestination == null ? "?" : dataDestination;
+			fields = fields == null ? List.of() : List.copyOf(fields);
+		}
+	}
+
+	public record ConnectionModels(@Nullable String lead, @Nullable String worker) {
+	}
+
+	/** A connection: which LLM endpoint, its status, and who uses it. The key itself is never sent (secret = masked). */
+	public record ConnectionInfo(String id, String name, String provider, String providerLabel, String runtime, String source,
+		@Nullable String baseUrl, @Nullable String secret, @Nullable ConnectionModels models, @Nullable String effort, String dataDestination,
+		boolean personalUse, AuthStatus auth, @Nullable String message, @Nullable String account, List<String> availableModels,
+		List<String> roles) {
+		public ConnectionInfo {
+			name = name == null ? id : name;
+			providerLabel = providerLabel == null ? provider : providerLabel;
+			source = source == null ? "user" : source;
+			dataDestination = dataDestination == null ? "?" : dataDestination;
+			auth = auth == null ? AuthStatus.UNKNOWN : auth;
+			availableModels = availableModels == null ? List.of() : List.copyOf(availableModels);
+			roles = roles == null ? List.of() : List.copyOf(roles);
+		}
+
+		public boolean editable() {
+			return "user".equals(source);
+		}
+
+		public boolean hasRole(String role) {
+			return roles.contains(role);
+		}
+	}
+
 	public record AgentLogs(String agentId, List<LogEntry> entries) {
 		public AgentLogs {
 			entries = entries == null ? List.of() : List.copyOf(entries);
@@ -252,8 +302,11 @@ public final class Protocol {
 	// ------------------------------------------------------------------ Foreman -> mod messages
 
 	public record Snapshot(ForemanStatus foreman, List<Agent> agents, List<Task> tasks, List<Decision> decisions, List<Repo> repos,
-		List<MemoryEntry> memory, @Nullable Goal goal, List<Goal> goals, List<FeedItem> feed, List<AgentLogs> logs) {
+		List<MemoryEntry> memory, @Nullable Goal goal, List<Goal> goals, List<FeedItem> feed, List<AgentLogs> logs,
+		List<ConnectionInfo> connections, List<ProviderInfo> providers, @Nullable String secretStore) {
 		public Snapshot {
+			connections = connections == null ? List.of() : List.copyOf(connections);
+			providers = providers == null ? List.of() : List.copyOf(providers);
 			agents = agents == null ? List.of() : List.copyOf(agents);
 			tasks = tasks == null ? List.of() : List.copyOf(tasks);
 			decisions = decisions == null ? List.of() : List.copyOf(decisions);
@@ -263,6 +316,12 @@ public final class Protocol {
 			feed = feed == null ? List.of() : List.copyOf(feed);
 			logs = logs == null ? List.of() : List.copyOf(logs);
 		}
+	}
+
+	public record ConnectionUpsert(ConnectionInfo connection) {
+	}
+
+	public record ConnectionRemove(String connectionId) {
 	}
 
 	public record AgentUpsert(Agent agent) {

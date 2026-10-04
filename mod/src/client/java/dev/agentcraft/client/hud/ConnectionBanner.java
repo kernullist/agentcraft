@@ -134,16 +134,21 @@ public final class ConnectionBanner implements HudElement {
 		}
 	}
 
-	/** The codex backend waits for a device-code sign-in: the message carries the URL and the code. */
+	/** A ChatGPT connection waits for a device-code sign-in: the message carries the URL and the code. */
 	private static boolean isDeviceCode(ForemanStatus fs) {
-		return fs != null && fs.backend() == BackendName.CODEX && fs.auth() == AuthStatus.CHECKING && fs.message() != null && fs.message().startsWith("Sign in");
+		return fs != null && fs.auth() == AuthStatus.CHECKING && fs.message() != null && fs.message().startsWith("Sign in to ChatGPT");
 	}
 
 	private static void drawAuthBanner(GuiGraphicsExtractor g, Font font, ForemanStatus fs, boolean signIn) {
 		boolean codex = fs.backend() == BackendName.CODEX;
-		String head = signIn ? "Sign in to ChatGPT (Codex backend)" : codex ? "Codex backend can't sign in" : "Claude backend can't authenticate";
+		String head = signIn ? "Sign in to ChatGPT (Codex)" : "The team's model connection is not working";
 		String fallback = codex ? "restart the Foreman for a new sign-in code" : "run `claude` and /login, then restart the Foreman";
 		String msg = fs.message() != null ? fs.message() : fallback;
+		// connections can be fixed from the game: say where
+		dev.agentcraft.client.foreman.ForemanState state = dev.agentcraft.client.foreman.Foreman.state();
+		if (!signIn && state != null && !state.connections().isEmpty()) {
+			msg = msg + "  -  Console (`): /connect";
+		}
 		String tone = signIn ? "waiting" : "error";
 		int maxW = Math.min(360, g.guiWidth() - 40);
 		var lines = TextUtil.wrap(font, msg, maxW - 34);

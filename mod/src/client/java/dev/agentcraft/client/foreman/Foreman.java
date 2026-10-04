@@ -83,6 +83,31 @@ public final class Foreman {
 		return link.send(ForemanJson.msg("repo.add").put("path", path).json());
 	}
 
+	/**
+	 * Add ({@code id} absent) or edit a connection; the Foreman tests it right away and the ack's
+	 * result carries the connection. {@code apiKey} is write-only: it goes to the OS credential
+	 * store and never comes back.
+	 */
+	public static CompletableFuture<Ack> saveConnection(JsonObject connection) {
+		JsonObject m = ForemanJson.msg("connection.save").json();
+		m.add("connection", connection);
+		return link.send(m);
+	}
+
+	public static CompletableFuture<Ack> deleteConnection(String connectionId) {
+		return link.send(ForemanJson.msg("connection.delete").put("connectionId", connectionId).json());
+	}
+
+	/** Check a connection again (ChatGPT: starts the device-code sign-in when needed). */
+	public static CompletableFuture<Ack> testConnection(String connectionId) {
+		return link.send(ForemanJson.msg("connection.test").put("connectionId", connectionId).json());
+	}
+
+	/** {@code role}: lead | workers | all; applies from the next turn. */
+	public static CompletableFuture<Ack> assignConnection(String connectionId, String role) {
+		return link.send(ForemanJson.msg("connection.assign").put("connectionId", connectionId).put("role", role).json());
+	}
+
 	/** Structured diff of a worktree (or an agent id: its current worktree) vs its base. */
 	public static CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
 		return link.requestDiff(repoId, worktree);

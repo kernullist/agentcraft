@@ -7,6 +7,9 @@ import dev.agentcraft.client.foreman.Protocol.AgentLog;
 import dev.agentcraft.client.foreman.Protocol.AgentLogs;
 import dev.agentcraft.client.foreman.Protocol.AgentSay;
 import dev.agentcraft.client.foreman.Protocol.AgentUpsert;
+import dev.agentcraft.client.foreman.Protocol.ConnectionInfo;
+import dev.agentcraft.client.foreman.Protocol.ConnectionRemove;
+import dev.agentcraft.client.foreman.Protocol.ConnectionUpsert;
 import dev.agentcraft.client.foreman.Protocol.Decision;
 import dev.agentcraft.client.foreman.Protocol.DecisionKind;
 import dev.agentcraft.client.foreman.Protocol.DecisionUpsert;
@@ -20,6 +23,7 @@ import dev.agentcraft.client.foreman.Protocol.LogEntry;
 import dev.agentcraft.client.foreman.Protocol.MemoryEntry;
 import dev.agentcraft.client.foreman.Protocol.MemoryUpsert;
 import dev.agentcraft.client.foreman.Protocol.Notify;
+import dev.agentcraft.client.foreman.Protocol.ProviderInfo;
 import dev.agentcraft.client.foreman.Protocol.Repo;
 import dev.agentcraft.client.foreman.Protocol.RepoUpsert;
 import dev.agentcraft.client.foreman.Protocol.Snapshot;
@@ -69,6 +73,9 @@ public final class ForemanState {
 	private final Map<String, AgentSay> lastSay = new HashMap<>();
 	private final Deque<FeedItem> feed = new ArrayDeque<>();
 	private final Deque<Notify> notifications = new ArrayDeque<>();
+	private final Map<String, ConnectionInfo> connections = new LinkedHashMap<>();
+	private List<ProviderInfo> providers = List.of();
+	private @Nullable String secretStore;
 	private @Nullable Goal goal;
 	private @Nullable ForemanStatus status;
 	private LinkStatus link;
@@ -193,6 +200,21 @@ public final class ForemanState {
 	}
 
 	/** Backend/auth status of the Foreman, or null before the first snapshot. */
+	/** claude/codex Foremen: every connection (empty for sim or an older Foreman). */
+	public Map<String, ConnectionInfo> connections() {
+		return Collections.unmodifiableMap(connections);
+	}
+
+	/** Kinds of connection the user can add (the form). */
+	public List<ProviderInfo> providers() {
+		return providers;
+	}
+
+	/** "keyring", or "env-only" when keys can only come from env:NAME. */
+	public @Nullable String secretStore() {
+		return secretStore;
+	}
+
 	public @Nullable ForemanStatus status() {
 		return status;
 	}
@@ -441,6 +463,18 @@ public final class ForemanState {
 				bounded(notifications, n, NOTIFY_TAIL);
 				fire(l -> l.onNotify(n));
 			}
+			case "connection.upsert" -> {
+				ConnectionInfo c = ForemanJson.read(json, ConnectionUpsert.class).connection();
+				if (c != null && c.id() != null) {
+					connections.put(c.id(), c);
+				}
+			}
+			case "connection.remove" -> {
+				String id = ForemanJson.read(json, ConnectionRemove.class).connectionId();
+				if (id != null) {
+					connections.remove(id);
+				}
+			}
 			case "foreman.status" -> {
 				ForemanStatus s = ForemanJson.read(json, ForemanStatusMsg.class).status();
 				if (s != null) {
@@ -456,6 +490,14 @@ public final class ForemanState {
 	}
 
 	private void applySnapshot(Snapshot s) {
+		connections.clear();
+		for (ConnectionInfo c : s.connections()) {
+			if (c != null && c.id() != null) {
+				connections.put(c.id(), c);
+			}
+		}
+		providers = s.providers();
+		secretStore = s.secretStore();
 		agents.clear();
 		tasks.clear();
 		decisions.clear();

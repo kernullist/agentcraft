@@ -40,6 +40,7 @@ public final class ClientFeatures {
 		DiffFeature.init();
 		LibraryFeature.init();
 		PermissionsFeature.init();
+		dev.agentcraft.client.connections.ConnectionsFeature.init();
 		AgentCraft.LOGGER.info("AgentCraft client features initialised");
 	}
 }

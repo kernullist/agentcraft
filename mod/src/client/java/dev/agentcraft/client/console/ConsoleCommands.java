@@ -41,7 +41,7 @@ public final class ConsoleCommands {
 	// ------------------------------------------------------------------ intents
 
 	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
-		Sound, Invalid, Empty {
+		Sound, Connect, Invalid, Empty {
 	}
 
 	/** {@code repoId} null = the Foreman's default; {@code choices} non-empty = ask which repo first. */
@@ -82,6 +82,10 @@ public final class ConsoleCommands {
 	public record Clear() implements Intent {
 	}
 
+	/** Open the Connections screen (which LLM the lead and the workers use). */
+	public record Connect() implements Intent {
+	}
+
 	public record Sound(@Nullable Boolean on) implements Intent {
 	}
 
@@ -108,6 +112,7 @@ public final class ConsoleCommands {
 		new Command("repos", "/repos", "list repos"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
+		new Command("connect", "/connect", "connections: which LLM the lead and the workers use"),
 		new Command("clear", "/clear", "clear the console's own lines"),
 		new Command("help", "/help", "this list"));
 
@@ -186,6 +191,7 @@ public final class ConsoleCommands {
 			case "decide", "decisions", "d" -> new Decide(args.isEmpty() ? null : args.get(0));
 			case "clear", "cls" -> new Clear();
 			case "sound", "sounds", "mute" -> parseSound(cmd, args);
+			case "connect", "connections", "llm" -> new Connect();
 			case "goal" -> rest.isEmpty() ? new Invalid("type the goal after /goal") : goal(rest, s);
 			default -> new Invalid("unknown command /" + cmd + " (/help lists them)");
 		};
@@ -489,6 +495,7 @@ public final class ConsoleCommands {
 			case Status st -> "show status";
 			case Help h -> "show help";
 			case Decide d -> "open decisions";
+			case Connect c -> "open connections";
 			case Clear c -> "clear console";
 			case Sound so -> so.on() == null ? "sound status" : so.on() ? "sound on" : "sound off";
 			case Invalid i -> null;
