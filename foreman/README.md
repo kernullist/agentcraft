@@ -67,6 +67,33 @@ unattended (`/wait d3`, `/wait goal done`, `/wait 2` are available in scripts);
 Stop the Foreman with Ctrl+C (or `q` + Enter). State is saved continuously; a hard kill loses at
 most ~100 ms of state, and interrupted agent turns resume on the next start.
 
+## Connections (which LLM the team uses)
+
+`--backend claude|codex` starts the team on the connection the command line describes (`cli`). More
+connections are added while the Foreman runs, from the game (console `/connect`) or the TUI:
+
+```text
+/connect                                   list (status, who uses what, masked keys)
+/connect providers                         what can be added, and where each sends your code
+/connect add deepseek key=sk-...           or keyenv=DEEPSEEK_API_KEY; name= url= lead= worker= effort=
+/connect add anthropic-compatible url=https://gw.example.com/anthropic key=... lead=model-a worker=model-b
+/connect add chatgpt                       Codex on your ChatGPT plan: shows a device code
+/connect use deepseek workers              lead | workers | all; from the next turn
+/connect test deepseek    /connect edit deepseek lead=...    /connect rm deepseek
+```
+
+- Saved in `<home>/connections.json` (references only) with the keys in the OS credential store
+  (Windows Credential Manager, macOS Keychain, Secret Service); `env:NAME` references work everywhere.
+  Clients never get a key back, only `sk-…a1b2`.
+- Each role's turns run on its connection's runtime: Claude Agent SDK for the Claude-family providers
+  (DeepSeek and other Anthropic-compatible endpoints included), codex app-server for ChatGPT. A
+  failed connection stops only the role that uses it.
+- A job whose connection changed starts a new session with a handover prompt (the old session's
+  endpoint may not be able to read it). Non-Claude endpoints report tokens instead of USD.
+- `--connection <id>` (or `--lead-connection` / `--worker-connection`) picks saved connections for one run.
+
+Design and trade-offs: docs/adr/0002-runtimes-and-connections.md.
+
 ## Options
 
 `npm run start -- --help` prints everything. The important ones:

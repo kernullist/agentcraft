@@ -219,6 +219,13 @@ the first time; in an older world, rebuild it with `/agentcraft hq`.
 > agents' own `CODEX_HOME` (`~/.agentcraft/codex/codex`, not your `~/.codex`); AgentCraft never sees
 > a token. Approvals, worktrees and the push block work as with Claude.
 
+**Other models: connections.** Open the console (<kbd>`</kbd>) and type `/connect` to add a connection
+while the game runs: the Anthropic API, your Claude login, a cloud provider, **DeepSeek**, any
+Anthropic-compatible endpoint, or ChatGPT. Each one is tested when you save it, shows where your code
+will be sent, and can run Marlow, the workers or both (for example Marlow on Claude and the workers
+on DeepSeek), from the next turn on. API keys go to your OS credential store and are never shown
+again. The terminal UI has the same `/connect` command. Details: [docs/adr/0002](docs/adr/0002-runtimes-and-connections.md).
+
 **Your name.** The agents call you by your OS user name. Change it with
 `-ForemanArgs '--user-name','Sam'`, `AGENTCRAFT_USER_NAME`, or `{"userName": "Sam"}` in
 `~/.agentcraft/config.json`.

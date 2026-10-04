@@ -1,6 +1,9 @@
 # CHANGELOG
 
 ## 2026-10-04
+- foreman/mod: **다중 LLM 연결(Connections)**. 런타임(Claude Agent SDK / codex app-server)과 연결(프로바이더+엔드포인트+키+모델)을 분리,
+  리드/워커별 배정, 실행 중 추가·테스트·전환(게임 콘솔 `/connect` 화면, TUI `/connect`). 신규 프로바이더: DeepSeek(Anthropic 호환 엔드포인트),
+  Anthropic API, Claude 로그인, 클라우드, Anthropic 호환 임의 엔드포인트, ChatGPT. 키는 OS 자격증명 저장소, 클라이언트엔 마스킹만. 결정: docs/adr/0002.
 - foreman: `--backend codex` 추가. ChatGPT 구독을 장치 인증(device code)으로 로그인해 공식 `codex app-server`로
   리드/워커를 실행. 승인 요청은 기존 policy.ts + 인게임 권한 프롬프트, 팀 도구는 dynamic tools. 결정: docs/adr/0001.
 - foreman: 공통 오케스트레이션을 `agents/team/`(TeamBackend, 팀 도구, 프롬프트)으로 추출 (동작 무변경).
