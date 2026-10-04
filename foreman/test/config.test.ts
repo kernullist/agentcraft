@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { rmrf, tempDir } from './helpers.js';
 
@@ -39,6 +40,25 @@ describe('loadConfig argument checking', () => {
   it('refuses mistyped flags and stray positionals', () => {
     expect(() => load(['--wokers', 'kit'])).toThrow(/unknown option "--wokers"/);
     expect(() => load(['--backend', 'sim', 'oops', 'extra'])).toThrow(/unexpected argument "oops"/);
+  });
+
+  it('accepts the codex backend with its own home, models and effort scale', () => {
+    const cfg = load(['--backend', 'codex', '--workers', 'kit', '--model', 'gpt-x', '--effort', 'minimal']);
+    expect(cfg.backend).toBe('codex');
+    expect(cfg.profile).toBe('codex');
+    expect(cfg.codex.codexHome).toBe(path.join(home!, 'codex', 'codex'));
+    expect(cfg.codex.workers).toEqual(['kit']);
+    expect(cfg.codex.leadModel).toBe('gpt-x');
+    expect(cfg.codex.effort).toBe('minimal');
+    // --effort is the codex scale here: the claude config keeps its default
+    expect(cfg.claude.effort).toBe('medium');
+    expect(cfg.notify).toBe(true);
+    expect(cfg.signMerges).toBe(true);
+    const dflt = load(['--backend', 'codex', '--codex-home', 'C:/x/codex-home']);
+    expect(dflt.codex.leadModel).toBeUndefined();
+    expect(dflt.codex.effort).toBeUndefined();
+    expect(dflt.codex.codexHome).toBe(path.resolve('C:/x/codex-home'));
+    expect(() => load(['--backend', 'codex', '--effort', 'max'])).toThrow(/unknown effort "max" for codex/);
   });
 
   it('refuses an unknown effort instead of falling back to medium', () => {

@@ -68,7 +68,7 @@ public final class ConnectionBanner implements HudElement {
 		} else if (link.synced()) {
 			dot = fs != null && fs.auth() == AuthStatus.FAILED ? "error" : fs != null && fs.auth() == AuthStatus.CHECKING ? "thinking" : "working";
 			title = "Foreman · " + backendLabel(fs);
-			if (fs != null && fs.backend() == BackendName.CLAUDE && fs.account() != null) {
+			if (fs != null && (fs.backend() == BackendName.CLAUDE || fs.backend() == BackendName.CODEX) && fs.account() != null) {
 				detail = fs.account();
 			}
 			if (now - link.sinceMs() > FADE_AFTER_MS) {
@@ -87,7 +87,9 @@ public final class ConnectionBanner implements HudElement {
 		drawPill(g, font, dot, title, detail, alpha, pulse, now);
 
 		if (link.synced() && fs != null && fs.auth() == AuthStatus.FAILED) {
-			drawAuthBanner(g, font, fs);
+			drawAuthBanner(g, font, fs, false);
+		} else if (link.synced() && isDeviceCode(fs)) {
+			drawAuthBanner(g, font, fs, true);
 		}
 	}
 
@@ -98,6 +100,7 @@ public final class ConnectionBanner implements HudElement {
 		return switch (fs.backend()) {
 			case SIM -> fs.speed() != null && fs.speed() != 1.0 ? "sim ×" + trim(fs.speed()) : "sim";
 			case CLAUDE -> "claude";
+			case CODEX -> "codex";
 			default -> fs.backend().wire();
 		};
 	}
@@ -131,9 +134,17 @@ public final class ConnectionBanner implements HudElement {
 		}
 	}
 
-	private static void drawAuthBanner(GuiGraphicsExtractor g, Font font, ForemanStatus fs) {
-		String head = "Claude backend can't authenticate";
-		String msg = fs.message() != null ? fs.message() : "run `claude` and /login, then restart the Foreman";
+	/** The codex backend waits for a device-code sign-in: the message carries the URL and the code. */
+	private static boolean isDeviceCode(ForemanStatus fs) {
+		return fs != null && fs.backend() == BackendName.CODEX && fs.auth() == AuthStatus.CHECKING && fs.message() != null && fs.message().startsWith("Sign in");
+	}
+
+	private static void drawAuthBanner(GuiGraphicsExtractor g, Font font, ForemanStatus fs, boolean signIn) {
+		boolean codex = fs.backend() == BackendName.CODEX;
+		String head = signIn ? "Sign in to ChatGPT (Codex backend)" : codex ? "Codex backend can't sign in" : "Claude backend can't authenticate";
+		String fallback = codex ? "restart the Foreman for a new sign-in code" : "run `claude` and /login, then restart the Foreman";
+		String msg = fs.message() != null ? fs.message() : fallback;
+		String tone = signIn ? "waiting" : "error";
 		int maxW = Math.min(360, g.guiWidth() - 40);
 		var lines = TextUtil.wrap(font, msg, maxW - 34);
 		Kit.Padding p = Kit.padding("panel_paper");
@@ -144,10 +155,10 @@ public final class ConnectionBanner implements HudElement {
 		Panels.panel(g, x, y, w, h);
 		long now = Util.getMillis();
 		float t = (float) Math.sin((now % 1200) / 1200.0 * Math.PI * 2) * 0.5f + 0.5f;
-		Panels.sprite(g, Kit.dot("error", true), x + p.left(), y + p.top() - 1, 11, 11, ((int) (255 * (0.4f + 0.6f * t)) << 24) | 0xFFFFFF);
-		Panels.dot(g, "error", x + p.left() + 2, y + p.top() + 1, false);
+		Panels.sprite(g, Kit.dot(tone, true), x + p.left(), y + p.top() - 1, 11, 11, ((int) (255 * (0.4f + 0.6f * t)) << 24) | 0xFFFFFF);
+		Panels.dot(g, tone, x + p.left() + 2, y + p.top() + 1, false);
 		int tx = x + p.left() + 16;
-		g.text(font, head, tx, y + p.top(), UiStyle.status("error"), false);
+		g.text(font, head, tx, y + p.top(), UiStyle.status(tone), false);
 		int ly = y + p.top() + 11;
 		for (var line : lines) {
 			g.text(font, line, tx, ly, UiStyle.color("paper.text"), false);
