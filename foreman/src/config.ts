@@ -56,7 +56,7 @@ export interface CodexConfig {
   leadReview: boolean;
   /** CODEX_HOME for the agents (login, threads): default <home>/<profile>/codex, kept apart from ~/.codex */
   codexHome: string;
-  /** the Codex CLI to run (default: `codex` on PATH) */
+  /** the Codex CLI to run (default: the bundled @openai/codex, then `codex` on PATH) */
   codexBin?: string;
 }
 
@@ -345,10 +345,11 @@ usage: npm run start -- [options]
 
  codex backend (OpenAI Codex on your ChatGPT subscription, personal use)
   auth: the Foreman signs in with a device code: open the URL it shows (console, in-game banner,
-        notification) and enter the code. Needs the Codex CLI (npm i -g @openai/codex).
+        notification) and enter the code. The Codex CLI comes with the Foreman (npm ci).
   --codex-home <dir>       Codex state for the agents (login, threads); default <home>/<profile>/codex
                            (env AGENTCRAFT_CODEX_HOME). Your own ~/.codex is not used.
-  --codex-bin <path>       Codex CLI to run (default: codex on PATH; env AGENTCRAFT_CODEX_BIN)
+  --codex-bin <path>       another Codex CLI (default: the bundled, tested version; then codex on
+                           PATH; env AGENTCRAFT_CODEX_BIN). A different version gets a warning.
   --model, --lead-model, --worker-model   Codex model ids (default: Codex's default model)
   --effort minimal|low|medium|high|xhigh  reasoning effort (default: Codex's default)
   --workers, --max-concurrent, --ci, --no-lead-review, --no-resume   as for claude

@@ -24,7 +24,7 @@ import { killTree } from '../../util/proc.js';
 import { truncate } from '../../util/text.js';
 import { TeamBackend, teamEnv, type Role, type TurnSpec, type TurnStats } from '../team/backend.js';
 import { buildTeamTools, type TeamTool } from '../team/tools.js';
-import { AppServerClient, resolveCodexCommand, type CodexCommand } from './appserver.js';
+import { AppServerClient, bundledCodex, resolveCodexCommand, versionFromUserAgent, type CodexCommand } from './appserver.js';
 import { deviceCodeMessage, describeAccount, ensureChatgptLogin } from './auth.js';
 import { CodexMapper, fileChangeTool } from './stream.js';
 
@@ -57,6 +57,7 @@ export class CodexBackend extends TeamBackend {
   readonly name = 'codex' as const;
   protected readonly label = 'Codex';
   private readonly cmd: CodexCommand;
+  private readonly bundled = bundledCodex();
   private login: AbortController | undefined;
 
   constructor(
@@ -65,7 +66,7 @@ export class CodexBackend extends TeamBackend {
     private opts: CodexBackendOptions = {},
   ) {
     super(fm, codexCfg);
-    this.cmd = resolveCodexCommand(codexCfg.codexBin);
+    this.cmd = resolveCodexCommand(codexCfg.codexBin, process.env, this.bundled ?? null);
   }
 
   protected modelFor(role: Role): string {
@@ -86,6 +87,20 @@ export class CodexBackend extends TeamBackend {
     return new AppServerClient({ cmd: this.cmd, env, ...(cwd ? { cwd } : {}), onStderr: (l) => this.fm.log.debug(`[${tag} codex] ${l.slice(0, 300)}`) });
   }
 
+  /**
+   * The bundled CLI is the tested one. Another one (--codex-bin, PATH) may speak a different
+   * app-server protocol (dynamic tools are experimental): say so, but let it run.
+   */
+  private checkVersion(running: string | undefined): void {
+    const tested = this.bundled?.version;
+    this.fm.log.info(`codex CLI ${running ?? '?'} (${this.cmd.source}${this.cmd.source === 'bundled' ? '' : `, tested with ${tested ?? '?'}`})`);
+    if (this.cmd.source !== 'bundled' && tested && running && running !== tested) {
+      const msg = `Codex CLI ${running} is not the version AgentCraft is tested with (${tested}); its app-server protocol may differ. Drop --codex-bin to use the bundled one.`;
+      this.fm.log.warn(msg);
+      this.fm.bus.feed('system', msg);
+    }
+  }
+
   private statusMessage(): string {
     return `Codex (lead ${this.modelFor('lead')}, workers ${this.modelFor('worker')})`;
   }
@@ -104,9 +119,11 @@ export class CodexBackend extends TeamBackend {
     let client: AppServerClient;
     try {
       client = this.startServer(this.env(), undefined, 'auth');
-      await client.initialize('agentcraft_foreman', FOREMAN_VERSION);
+      const init = await client.initialize('agentcraft_foreman', FOREMAN_VERSION);
+      this.checkVersion(versionFromUserAgent(init.userAgent));
     } catch (e) {
-      this.markAuthFailed(`Could not start the Codex CLI (${truncate((e as Error).message, 160)}). Install it with \`npm i -g @openai/codex\` (or pass --codex-bin), then restart the Foreman. The sim backend still works.`);
+      const hint = this.cmd.source === 'explicit' ? 'Check --codex-bin' : 'Run `npm ci` in foreman/ (it installs the Codex CLI the Foreman uses)';
+      this.markAuthFailed(`Could not start the Codex CLI (${truncate((e as Error).message, 160)}). ${hint}, then restart the Foreman. The sim backend still works.`);
       return false;
     }
     // until the sign-in is done nothing may run (the scheduler checks authFailed)

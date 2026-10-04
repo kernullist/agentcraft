@@ -37,4 +37,5 @@
 - 재검토 트리거: dynamic tools 제거/변경, thread/resume 후 dynamic tools 미유지, Windows에서 workspace-write가 worktree 밖 쓰기를 못 막는 것이 확인될 때, OpenAI 정책상 서드파티 오케스트레이션 금지 확인 시.
 
 ## 변경 이력
-- 2026-10-04: 최초 결정
+- 2026-10-04: 최초 결정 (Codex CLI는 사용자가 전역 설치한다는 전제)
+- 2026-10-04: Codex CLI를 foreman 의존성으로 번들하고 버전 고정(`@openai/codex@0.147.0`). 이전 전제(전역 설치)는 사용자 업데이트로 app-server 프로토콜(특히 experimental dynamic tools)이 조용히 깨질 위험이 있었음. 탐색 순서 `--codex-bin` > 번들 > PATH, 번들 외 버전 불일치 시 경고. 감수: 모든 foreman 설치에 Codex 바이너리 다운로드.

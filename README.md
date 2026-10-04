@@ -213,8 +213,8 @@ the first time; in an older world, rebuild it with `/agentcraft hq`.
 > `{"claude": {"useClaudeLogin": true}}` in `~/.agentcraft/config.json`.
 
 > **Personal use with a ChatGPT plan (Codex).** `tools\launch.ps1 -Backend codex` runs the same team
-> on OpenAI Codex with your own ChatGPT subscription. It needs the Codex CLI (`npm i -g @openai/codex`).
-> On first start the Foreman shows a device code (in-game banner, console, desktop notification):
+> on OpenAI Codex with your own ChatGPT subscription. The Codex CLI comes with the Foreman (a pinned,
+> tested version installed by `npm ci`; `--codex-bin` picks another one). On first start the Foreman shows a device code (in-game banner, console, desktop notification):
 > open the URL on any device, enter the code, and the team starts. Codex keeps the sign-in in the
 > agents' own `CODEX_HOME` (`~/.agentcraft/codex/codex`, not your `~/.codex`); AgentCraft never sees
 > a token. Approvals, worktrees and the push block work as with Claude.

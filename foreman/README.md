@@ -33,7 +33,7 @@ npm install
 npm run start -- --backend claude --repo C:\path\to\your\repo
 # personal use only: your local `claude` CLI login instead of an API key
 npm run start -- --backend claude --repo C:\path\to\your\repo --use-claude-login
-# personal use: OpenAI Codex on your ChatGPT plan (device-code sign-in; needs `npm i -g @openai/codex`)
+# personal use: OpenAI Codex on your ChatGPT plan (device-code sign-in; the Codex CLI is a pinned dependency)
 npm run start -- --backend codex --repo C:\path\to\your\repo
 
 # simulated team on a fresh sandbox repo (no API calls) - for demos and screenshot QA
@@ -319,7 +319,7 @@ npm run check       # all of the above + protocol doc freshness
 - **`port 7878 is already in use`**: another Foreman is running (`~/.agentcraft/foreman.json` and `~/.agentcraft/<profile>/foreman.json` have its pid) - or use `--port`.
 - **`profile "claude" is in use by the Foreman pid N`**: that profile already has a running Foreman; stop it or use `--profile`.
 - **`... is not a repository root`**: `/repo add` the repository's top folder (the message names it).
-- **Codex backend asks to sign in**: open the URL in the banner/console on any device and enter the code. The code expires after ~15 minutes (a new one is offered up to 3 times); after that restart the Foreman. The sign-in lives in `<home>/<profile>/codex` (`--codex-home`). See `src/agents/codex/` and docs/adr/0001.
+- **Codex backend asks to sign in**: open the URL in the banner/console on any device and enter the code. The code expires after ~15 minutes (a new one is offered up to 3 times); after that restart the Foreman. The sign-in lives in `<home>/<profile>/codex` (`--codex-home`). The Codex CLI is the pinned `@openai/codex` from package.json; "Could not start the Codex CLI" means `npm ci` was not run (or a platform package is missing). See `src/agents/codex/` and docs/adr/0001.
 - **Banner says auth failed**: set `ANTHROPIC_API_KEY` (or a cloud provider switch) and restart the Foreman. With `--use-claude-login`: run `claude` and `/login`. The sim backend works without auth. Why the claude.ai login is opt-in: Anthropic does not allow third-party tools to offer it ([Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)); see `src/agents/claude/auth.ts`.
 - **Merge refused: uncommitted changes**: commit or stash in your checkout, then choose Merge again (the decision re-opened).
 - **Reset the demo repo**: `node sandbox/create-demo.mjs --force`.

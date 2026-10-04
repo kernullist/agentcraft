@@ -129,3 +129,7 @@
 - 2026-10-04: 2~4단계 구현: `agents/codex/{appserver,auth,stream,index}.ts`, config `--backend codex`/`--codex-home`/`--codex-bin`, 프로토콜 `BackendName.codex`, mod enum + 로그인 배너, launch.ps1/mac.mjs. fake app-server(`test/fixtures/fake-codex.mjs`)로 로그인/전체 goal/승인/env 계약 테스트. 전체 488/488 통과, mod build 통과.
 - 2026-10-04: 발견: Codex `shell_environment_policy` 기본 제외(`*KEY*`)가 `GIT_CONFIG_KEY_n`을 지움 → `ignore_default_excludes=true` 필수(ADR-0001). Windows npm 설치는 `codex.cmd` shim이라 `node .../@openai/codex/bin/codex.js`로 shell 없이 실행.
 - 남은 것: 실기 검증(6절 1~4) — 사용자 장치 로그인 필요.
+- 2026-10-04: 결정 변경(사용자 승인, A안): Codex CLI를 전역 설치 전제 대신 foreman의 **고정 버전 npm 의존성**(`@openai/codex@0.147.0`)으로 번들.
+  실행 파일 탐색 순서 = `--codex-bin` > foreman/node_modules 번들 > PATH. 이유: 별도 설치 불필요 + experimental API(dynamic tools)를 검증한 버전에 고정해 프로토콜 드리프트 차단.
+  대가: claude만 쓰는 사용자도 `npm ci` 시 Codex 플랫폼 바이너리 다운로드. 대안 B(첫 사용 시 설치)는 런처 밖 실행(`npm run start`)에서 수동 설치가 남아 기각. 번들 외 실행 파일은 버전 불일치 시 경고.
+  구현 완료: lockfile에 6개 플랫폼 패키지 포함 확인, 실제 번들 CLI 기동 스모크 테스트(`test/codex-cli.test.ts`) 추가, 492/492 통과. Codex 업그레이드 = package.json 버전 변경 + 전체 테스트 + 실기 검증 후에만.

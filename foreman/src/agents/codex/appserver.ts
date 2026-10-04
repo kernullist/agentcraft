@@ -7,6 +7,7 @@
 // agent's environment (git identity, git safety), so every command the agent runs inherits it.
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import readline from 'node:readline';
 
@@ -14,24 +15,50 @@ export interface CodexCommand {
   command: string;
   /** arguments before `app-server` (e.g. the codex.js launcher script) */
   args: string[];
+  /** where it came from: --codex-bin, the Foreman's own pinned dependency, or PATH */
+  source: 'explicit' | 'bundled' | 'path';
 }
 
 /**
- * How to start the Codex CLI without a shell: an explicit `--codex-bin`, else `codex` on PATH. On
- * Windows the npm install is a `codex.cmd` shim, which Node cannot spawn without cmd.exe; its
- * launcher script (node_modules/@openai/codex/bin/codex.js) is run with this Node instead.
+ * The Codex CLI the Foreman ships with: the exact `@openai/codex` version in foreman/package.json
+ * (the app-server protocol, dynamic tools in particular, is experimental: this is the version the
+ * codex backend is tested against). Undefined when it is not installed (e.g. an optional platform
+ * package is missing).
  */
-export function resolveCodexCommand(explicit?: string, env: NodeJS.ProcessEnv = process.env): CodexCommand {
-  const viaNode = (js: string): CodexCommand => ({ command: process.execPath, args: [js] });
-  if (explicit) return /\.(c|m)?js$/i.test(explicit) ? viaNode(explicit) : { command: explicit, args: [] };
-  if (process.platform !== 'win32') return { command: 'codex', args: [] };
+export function bundledCodex(): { js: string; version: string } | undefined {
+  try {
+    const pkgJson = createRequire(import.meta.url).resolve('@openai/codex/package.json');
+    const version = (JSON.parse(fs.readFileSync(pkgJson, 'utf8')) as { version?: string }).version ?? '?';
+    const js = path.join(path.dirname(pkgJson), 'bin', 'codex.js');
+    return fs.existsSync(js) ? { js, version } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * How to start the Codex CLI without a shell: an explicit `--codex-bin`, else the bundled one, else
+ * `codex` on PATH. A codex.js launcher is run with this Node: on Windows the global npm install is
+ * a `codex.cmd` shim, which Node cannot spawn without cmd.exe.
+ */
+/** `bundled`: null = no bundled CLI (the default looks it up). */
+export function resolveCodexCommand(explicit?: string, env: NodeJS.ProcessEnv = process.env, bundled: { js: string } | null = bundledCodex() ?? null): CodexCommand {
+  const viaNode = (js: string, source: CodexCommand['source']): CodexCommand => ({ command: process.execPath, args: [js], source });
+  if (explicit) return /\.(c|m)?js$/i.test(explicit) ? viaNode(explicit, 'explicit') : { command: explicit, args: [], source: 'explicit' };
+  if (bundled) return viaNode(bundled.js, 'bundled');
+  if (process.platform !== 'win32') return { command: 'codex', args: [], source: 'path' };
   const dirs = (env.PATH ?? env.Path ?? '').split(';').filter(Boolean);
   for (const d of dirs) {
-    if (fs.existsSync(path.join(d, 'codex.exe'))) return { command: path.join(d, 'codex.exe'), args: [] };
+    if (fs.existsSync(path.join(d, 'codex.exe'))) return { command: path.join(d, 'codex.exe'), args: [], source: 'path' };
     const js = path.join(d, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-    if (fs.existsSync(path.join(d, 'codex.cmd')) && fs.existsSync(js)) return viaNode(js);
+    if (fs.existsSync(path.join(d, 'codex.cmd')) && fs.existsSync(js)) return viaNode(js, 'path');
   }
-  return { command: 'codex.exe', args: [] };
+  return { command: 'codex.exe', args: [], source: 'path' };
+}
+
+/** "agentcraft_foreman/0.147.0 (Windows ...)" -> "0.147.0" (the CLI version in initialize's userAgent). */
+export function versionFromUserAgent(userAgent: string | undefined): string | undefined {
+  return /^[^/\s]+\/(\d+\.\d+\.\d+[^\s(]*)/.exec(userAgent ?? '')?.[1];
 }
 
 export class AppServerError extends Error {
