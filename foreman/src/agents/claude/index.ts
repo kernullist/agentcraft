@@ -76,8 +76,8 @@ export class ClaudeRunner implements RuntimeRunner {
     return this.host.fm;
   }
 
-  private okMessage(conn: Connection): string {
-    return `${conn.name} (lead ${modelFor(conn, 'lead') ?? 'default'}, workers ${modelFor(conn, 'worker') ?? 'default'})`;
+  private okMessage(conn: Connection, available?: string[]): string {
+    return `${conn.name} (lead ${modelFor(conn, 'lead', available) ?? 'default'}, workers ${modelFor(conn, 'worker', available) ?? 'default'})`;
   }
 
   private env(conn: Connection, secret: string | undefined, model: string | undefined, who: { agentId?: string; cwd?: string } = {}): Record<string, string | undefined> {
@@ -102,7 +102,13 @@ export class ClaudeRunner implements RuntimeRunner {
       report({ auth: 'checking', message: `Checking ${conn.name}...` });
       try {
         const models = await listModels(conn, secret, this.fetchFn);
-        report({ auth: 'ok', message: this.okMessage(conn), account: `${p.label}${models.length ? ` · ${models.length} models` : ''}`, models });
+        // a model the user named that the endpoint does not list fails every turn: say so now
+        const missing = models.length ? (['lead', 'worker'] as const).map((r) => conn.models?.[r]).filter((m): m is string => !!m && !models.includes(m)) : [];
+        if (missing.length) {
+          report({ auth: 'failed', message: `${conn.name}: model ${missing.join(', ')} is not offered by the endpoint (it lists ${models.join(', ')}). Fix the model in the Connections screen (/connect).`, models });
+          return;
+        }
+        report({ auth: 'ok', message: this.okMessage(conn, models), account: `${p.label}${models.length ? ` · ${models.length} models` : ''}`, models });
       } catch (e) {
         const msg = e instanceof ConnectionTestError ? e.message : (e as Error).message;
         report({ auth: 'failed', message: `${conn.name}: ${msg}. Fix it in the Connections screen (/connect). The sim backend still works.` });

@@ -96,7 +96,7 @@ export class RoutedBackend extends TeamBackend {
 
   protected modelFor(role: Role): string {
     const c = this.connections.connectionFor(role);
-    return connModel(c, role) ?? (provider(c.provider).runtime === 'codex' ? 'codex default' : 'default');
+    return connModel(c, role, this.connections.statusOf(c.id).models) ?? (provider(c.provider).runtime === 'codex' ? 'codex default' : 'default');
   }
 
   protected authFailureMessage(detail: string, thrown: boolean): string {

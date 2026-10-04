@@ -125,7 +125,9 @@ describe('connections at runtime', () => {
     expect(kit.env.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic');
     expect(kit.env.ANTHROPIC_AUTH_TOKEN).toBe(SECRET);
     expect(kit.env.ANTHROPIC_API_KEY).toBeUndefined(); // the Anthropic key never goes to DeepSeek
-    expect(kit.model).toBe('sonnet'); // DeepSeek maps the Claude alias to its fast model
+    // a real DeepSeek model id (the endpoint rejects Claude aliases with HTTP 400), pinned in every slot
+    expect(kit.model).toBe('deepseek-flash');
+    expect(kit.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('deepseek-flash');
     expect(fm.store.data.sessions['kit:t1']!.connectionId).toBe('deepseek');
     expect(fm.store.data.sessions[`marlow:${goal.id}`]!.connectionId).toBeUndefined();
     // DeepSeek turns report tokens, not the SDK's Claude-priced USD
@@ -147,6 +149,15 @@ describe('connections at runtime', () => {
     await until(() => fm.goal(goal.id)!.status === 'done');
     expect(fm.store.data.sessions['kit:t1']!.connectionId).toBeUndefined();
   }, 180_000);
+
+  it('a model the endpoint does not offer fails at save time, not in the first turn', async () => {
+    const saved = ack(await send({ type: 'connection.save', connection: { provider: 'deepseek', name: 'DS alias', apiKey: 'sk-ok-key-1234', models: { lead: 'opus' } } }));
+    const c = saved.result!.connection as { id: string; auth: string; message: string };
+    expect(c.auth).toBe('failed');
+    expect(c.message).toContain('model opus is not offered');
+    expect(c.message).toContain('deepseek-pro, deepseek-flash');
+    await send({ type: 'connection.delete', connectionId: c.id });
+  });
 
   it('a rejected key blocks only the role that uses it', async () => {
     const saved = ack(await send({ type: 'connection.save', connection: { provider: 'deepseek', name: 'DS bad', apiKey: 'bad-key-0000' } }));

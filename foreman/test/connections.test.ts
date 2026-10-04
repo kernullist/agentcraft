@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConnectionManager } from '../src/connections/manager.js';
-import { ANTHROPIC_ENV_VARS, claudeEnv, ConnectionTestError, listModels, type FetchFn } from '../src/connections/providers.js';
+import { ANTHROPIC_ENV_VARS, claudeEnv, ConnectionTestError, listModels, modelFor, type FetchFn } from '../src/connections/providers.js';
 import { mask, MemorySecretStore } from '../src/connections/secrets.js';
 import { ConnectionStore } from '../src/connections/store.js';
 import type { Connection } from '../src/connections/types.js';
@@ -128,6 +128,20 @@ describe('provider environments', () => {
 
   it('refuses a Codex connection on the Claude runtime', () => {
     expect(() => claudeEnv(base, conn({ provider: 'chatgpt' }), undefined, undefined)).toThrow(/Claude runtime/);
+  });
+
+  it('DeepSeek runs its own model ids, never Claude aliases', () => {
+    const ds = conn({ provider: 'deepseek' });
+    expect(modelFor(ds, 'lead')).toBe('deepseek-v4-pro');
+    expect(modelFor(ds, 'worker')).toBe('deepseek-flash');
+    // listed by the endpoint: used as is
+    expect(modelFor(ds, 'lead', ['deepseek-flash', 'deepseek-v4-pro'])).toBe('deepseek-v4-pro');
+    // renamed by the endpoint: the default is replaced by a listed model of the right kind
+    expect(modelFor(ds, 'lead', ['deepseek-v5-flash', 'deepseek-v5-pro'])).toBe('deepseek-v5-pro');
+    expect(modelFor(ds, 'worker', ['deepseek-v5-pro', 'deepseek-v5-flash'])).toBe('deepseek-v5-flash');
+    expect(modelFor(ds, 'worker', ['only-one'])).toBe('only-one');
+    // the user's choice always wins
+    expect(modelFor(conn({ provider: 'deepseek', models: { lead: 'x-model' } }), 'lead', ['deepseek-v4-pro'])).toBe('x-model');
   });
 
   it('masks keys', () => {

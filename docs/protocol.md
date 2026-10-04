@@ -439,13 +439,13 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
       "baseUrl": "https://api.deepseek.com/anthropic",
       "secret": "sk-…a1b2",
       "models": {
-        "lead": "opus",
-        "worker": "sonnet"
+        "lead": "deepseek-v4-pro",
+        "worker": "deepseek-flash"
       },
       "dataDestination": "DeepSeek (api.deepseek.com)",
       "personalUse": false,
       "auth": "ok",
-      "message": "DeepSeek (lead opus, workers sonnet)",
+      "message": "DeepSeek (lead deepseek-v4-pro, workers deepseek-flash)",
       "account": "DeepSeek · 2 models",
       "availableModels": [
         "deepseek-v4-pro",
@@ -477,7 +477,7 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
           "label": "Lead model",
           "kind": "model",
           "required": false,
-          "placeholder": "opus"
+          "placeholder": "deepseek-v4-pro"
         }
       ]
     }
@@ -929,13 +929,13 @@ A connection was added or changed (status, roles, models). Replace by `connectio
     "baseUrl": "https://api.deepseek.com/anthropic",
     "secret": "sk-…a1b2",
     "models": {
-      "lead": "opus",
-      "worker": "sonnet"
+      "lead": "deepseek-v4-pro",
+      "worker": "deepseek-flash"
     },
     "dataDestination": "DeepSeek (api.deepseek.com)",
     "personalUse": false,
     "auth": "ok",
-    "message": "DeepSeek (lead opus, workers sonnet)",
+    "message": "DeepSeek (lead deepseek-v4-pro, workers deepseek-flash)",
     "account": "DeepSeek · 2 models",
     "availableModels": [
       "deepseek-v4-pro",
@@ -1193,11 +1193,7 @@ Add or edit a connection; it is tested right away. Ack result: `{connection}` (C
   "connection": {
     "provider": "deepseek",
     "name": "DeepSeek",
-    "apiKey": "sk-your-key",
-    "models": {
-      "lead": "opus",
-      "worker": "sonnet"
-    }
+    "apiKey": "sk-your-key"
   }
 }
 ```

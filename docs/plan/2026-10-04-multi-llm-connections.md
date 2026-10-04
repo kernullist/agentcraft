@@ -124,4 +124,10 @@
 - 2026-10-04: 실측: 게임 dev 클라이언트에서 가짜 키로 DeepSeek 연결 저장 → 실제 엔드포인트가 HTTP 401 → 실패 상태·마스킹 키 표시, 로그 어디에도 키 없음, 삭제 시 자격증명 저장소에서도 제거 확인.
   이 PC 환경엔 원래 `ANTHROPIC_BASE_URL`이 설정돼 있음 → `claude-env`(cli) 연결은 이를 그대로 상속(의도된 기존 동작), 다른 연결은 지우고 자기 값만 설정.
 - 2026-10-04: `run-deepseek.ps1` 추가(사용자 요청). 가짜 키로 env/stdin 두 경로 모두 실제 DeepSeek 401 확인.
+- 2026-10-04: **결정 변경 — DeepSeek 기본 모델.** 이전 결정("Claude 별칭 opus/sonnet을 보내 DeepSeek 측 매핑에 맡김")은 틀렸음.
+  근거였던 호환 문서 요약(WebFetch)과 달리 실제 API는 별칭을 매핑하지 않고 400 반환:
+  `The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed opus.` (사용자 실키 첫 goal, 리드 계획 턴에서 발생).
+  가짜 키 검증은 인증 단계에서 끝나 모델 경로를 못 봤음 → 실키 없이는 검증 불가였던 지점.
+  새 결정: 기본값을 실제 id(리드 deepseek-v4-pro, 워커 deepseek-flash)로, 연결 테스트에서 받은 모델 목록에 기본값이 없으면 목록에서 리드=pro류, 워커=flash류 선택(`modelFor` 폴백),
+  사용자가 지정한 모델이 목록에 없으면 저장 시점에 실패로 표시(첫 턴에서 터지지 않게).
 - 남은 것: 실제 DeepSeek 키로 goal 1개 끝까지(도구 호출·승인·merge) — 사용자 키 필요. Claude Code 요청 필드 중 DeepSeek이 거부하는 것이 있는지 실측.

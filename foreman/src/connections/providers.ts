@@ -133,10 +133,12 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     dataDestination: 'DeepSeek (api.deepseek.com)',
     personalUse: false,
     userCreatable: true,
-    // Claude aliases are mapped by DeepSeek (opus -> its pro model, sonnet/haiku -> its fast model)
-    fields: [apiKey('sk-...'), ...models('opus', 'sonnet')],
+    // real model ids: the endpoint does NOT map Claude aliases (a run with "opus" got HTTP 400 "The
+    // supported API model names are deepseek-flash, deepseek-v4-pro"); pickModel() falls back to the
+    // endpoint's own list when these names change
+    fields: [apiKey('sk-...'), ...models('deepseek-v4-pro', 'deepseek-flash')],
     defaultBaseUrl: 'https://api.deepseek.com/anthropic',
-    defaultModels: { lead: 'opus', worker: 'sonnet' },
+    defaultModels: { lead: 'deepseek-v4-pro', worker: 'deepseek-flash' },
     sdkCost: false,
     effort: false,
     needsSecret: true,
@@ -181,10 +183,23 @@ export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(PROVIDERS, v);
 }
 
-/** The model a role runs on this connection (undefined: the runtime's own default). */
-export function modelFor(conn: Connection, role: 'lead' | 'worker'): string | undefined {
+const LEAD_HINT = /(pro|max|reasoner|opus|large|ultra)/i;
+const WORKER_HINT = /(flash|fast|lite|mini|chat|sonnet|small|turbo)/i;
+
+/**
+ * The model a role runs on this connection (undefined: the runtime's own default). A model the
+ * user chose is used as is. A provider default that the endpoint did not list in its last test
+ * (`available`) is replaced by a listed one: lead prefers pro/reasoning names, workers fast ones.
+ */
+export function modelFor(conn: Connection, role: 'lead' | 'worker', available?: readonly string[]): string | undefined {
+  const chosen = conn.models?.[role];
+  if (chosen) return chosen;
   const p = provider(conn.provider);
-  return conn.models?.[role] ?? p.defaultModels[role];
+  const dflt = p.defaultModels[role];
+  if (!available?.length || (dflt && available.includes(dflt))) return dflt;
+  // only endpoints without Claude prices ever get here (Claude-family providers have no list)
+  const hint = role === 'lead' ? LEAD_HINT : WORKER_HINT;
+  return available.find((m) => hint.test(m)) ?? available[0];
 }
 
 /** The endpoint a connection talks to. */
